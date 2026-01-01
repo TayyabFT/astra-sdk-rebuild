@@ -15,6 +15,7 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
     docOverlayCanvasRef,
     handleDocumentUpload,
     handleConfirmDocumentUpload,
+    handleManualCapture,
     startDocCamera,
   } = useDocumentUpload({
     onUpload: (file, docType) => {
@@ -132,11 +133,22 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
             <div className="flex gap-2">
               <button
                 type="button"
+                onClick={handleManualCapture}
+                disabled={state.loading}
+                className="flex-1 py-3 px-4 rounded-lg text-white border-none text-base cursor-pointer transition-opacity disabled:opacity-50 disabled:cursor-not-allowed hover:opacity-90"
+                style={{
+                  background: "linear-gradient(90deg, #FF8A00 0%, #FF3D77 100%)"
+                }}
+              >
+                {state.loading ? "Capturing..." : "Capture Document"}
+              </button>
+              <button
+                type="button"
                 onClick={() => {
                   setState(prev => ({ ...prev, isDocScanMode: false }));
                 }}
                 disabled={state.loading}
-                className="w-full py-3 px-4 rounded-lg bg-[#111827] text-[#e5e7eb] border-none text-base cursor-pointer hover:bg-[#1f2937] transition-colors disabled:opacity-50"
+                className="py-3 px-4 rounded-lg bg-[#111827] text-[#e5e7eb] border-none text-base cursor-pointer hover:bg-[#1f2937] transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -144,7 +156,7 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
             <p className="m-0 text-[#9ca3af] text-xs text-center">
               {state.loading 
                 ? "Processing document..." 
-                : "Position your document in the frame. It will be captured automatically when detected."}
+                : "Position your document in the frame and tap 'Capture Document' when ready."}
             </p>
           </div>
         )}

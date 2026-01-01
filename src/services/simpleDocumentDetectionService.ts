@@ -14,7 +14,6 @@ export interface DocumentDetectionResult {
 
 export interface DocumentDetectionCallbacks {
   onDetection?: (result: DocumentDetectionResult) => void;
-  onAutoCapture?: (correctedImage: File) => void;
 }
 
 export class SimpleDocumentDetectionService {
@@ -33,7 +32,7 @@ export class SimpleDocumentDetectionService {
   private readonly maxHistory = 5;
   private frameSkip = 0;
   private readonly frameSkipCount = 2; // Process every 3rd frame
-  private captureTriggered = false; // Prevent multiple captures
+  // Removed captureTriggered - no auto-capture
   private smoothedCorners: DocumentCorners | null = null;
   private consecutiveGoodFrames = 0; // Track consecutive frames with good detection
 
@@ -553,12 +552,9 @@ export class SimpleDocumentDetectionService {
     const displayCorners = this.smoothCorners(corners);
 
     if (displayCorners) {
-      const rectangularity = this.calculateRectangularity(displayCorners);
-      const isReady = quality > 0.5 && rectangularity > 0.5 && this.stableFrames >= 5;
-      
-      // Color based on readiness
-      ctx.strokeStyle = isReady ? '#22c55e' : quality > 0.5 ? '#f59e0b' : '#ef4444';
-      ctx.lineWidth = isReady ? 4 : 3;
+      // Color based on detection quality
+      ctx.strokeStyle = quality > 0.5 ? '#22c55e' : '#f59e0b';
+      ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(displayCorners.topLeft.x, displayCorners.topLeft.y);
       ctx.lineTo(displayCorners.topRight.x, displayCorners.topRight.y);
@@ -568,28 +564,85 @@ export class SimpleDocumentDetectionService {
       ctx.stroke();
 
       // Draw corner markers
-      const cornerColor = isReady ? '#22c55e' : quality > 0.5 ? '#f59e0b' : '#ef4444';
+      const cornerColor = quality > 0.5 ? '#22c55e' : '#f59e0b';
       ctx.fillStyle = cornerColor;
       [displayCorners.topLeft, displayCorners.topRight, displayCorners.bottomRight, displayCorners.bottomLeft].forEach(point => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, isReady ? 10 : 8, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, 8, 0, Math.PI * 2);
         ctx.fill();
       });
 
-      // Fill area if ready to capture
-      if (isReady) {
-        ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
-        ctx.fill();
-        
-        // Draw "Ready to capture" indicator
-        ctx.fillStyle = '#22c55e';
-        ctx.font = 'bold 16px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('Ready to capture', width / 2, 30);
-      } else if (quality > 0.5) {
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.1)';
+      // Light fill to show detected area
+      if (quality > 0.5) {
+        ctx.fillStyle = 'rgba(34, 197, 94, 0.1)';
         ctx.fill();
       }
+    }
+  }
+  
+  async captureDocument(): Promise<File | null> {
+    const video = this.videoRef.current;
+    const canvas = this.canvasRef.current;
+    if (!video || !canvas) return null;
+
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null;
+
+    try {
+      const videoWidth = video.videoWidth;
+      const videoHeight = video.videoHeight;
+      
+      if (canvas.width !== videoWidth || canvas.height !== videoHeight) {
+        canvas.width = videoWidth;
+        canvas.height = videoHeight;
+      }
+
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+
+      // Get current detected corners
+      const overlayCanvas = this.overlayCanvasRef.current;
+      if (!overlayCanvas) return null;
+      
+      overlayCanvas.width = videoWidth;
+      overlayCanvas.height = videoHeight;
+      
+      // Process one frame to get current corners
+      const processCanvas = document.createElement('canvas');
+      processCanvas.width = Math.floor(videoWidth * 0.5);
+      processCanvas.height = Math.floor(videoHeight * 0.5);
+      const processCtx = processCanvas.getContext('2d');
+      if (!processCtx) return null;
+      
+      processCtx.drawImage(canvas, 0, 0, videoWidth, videoHeight, 0, 0, processCanvas.width, processCanvas.height);
+      const imageData = processCtx.getImageData(0, 0, processCanvas.width, processCanvas.height);
+      const edgesData = this.detectEdges(imageData, 0.5);
+      const edgesImageData = new ImageData(edgesData, processCanvas.width, processCanvas.height);
+      const corners = this.findDocumentContour(edgesImageData);
+      
+      if (corners) {
+        // Scale corners back to original resolution
+        const scaledCorners = {
+          topLeft: { x: corners.topLeft.x / 0.5, y: corners.topLeft.y / 0.5 },
+          topRight: { x: corners.topRight.x / 0.5, y: corners.topRight.y / 0.5 },
+          bottomRight: { x: corners.bottomRight.x / 0.5, y: corners.bottomRight.y / 0.5 },
+          bottomLeft: { x: corners.bottomLeft.x / 0.5, y: corners.bottomLeft.y / 0.5 }
+        };
+        
+        // Apply perspective correction
+        return await this.correctPerspective(scaledCorners, canvas);
+      } else {
+        // No document detected, capture full frame
+        const blob = await new Promise<Blob>((resolve) => {
+          canvas.toBlob((blob: Blob | null) => {
+            resolve(blob || new Blob());
+          }, 'image/jpeg', 0.92);
+        });
+        return new File([blob], 'document.jpg', { type: 'image/jpeg' });
+      }
+    } catch (error) {
+      console.error('Capture error:', error);
+      return null;
     }
   }
 
@@ -791,66 +844,7 @@ export class SimpleDocumentDetectionService {
         });
       }
 
-      // Auto-capture when conditions are met
-      // Ensure document is properly detected and frame is aligned
-      const isProperlyDetected = scaledCorners && 
-                                this.calculateRectangularity(scaledCorners) > 0.5 && // Must be reasonably rectangular
-                                quality > 0.5; // Minimum quality
-      
-      const shouldCapture = isProperlyDetected && 
-                           this.stableFrames >= 5 && 
-                           !this.captureTriggered && 
-                           this.callbacks.onAutoCapture;
-      
-      if (shouldCapture) {
-        this.captureTriggered = true; // Prevent multiple captures
-        console.log('Auto-capturing document...', { 
-          quality: quality.toFixed(2), 
-          stable, 
-          frames: this.stableFrames,
-          consecutiveGood: this.consecutiveGoodFrames,
-          corners: scaledCorners 
-        });
-        
-        // Use original resolution canvas for capture
-        try {
-          const correctedFile = await this.correctPerspective(scaledCorners, canvas);
-          if (correctedFile) {
-            console.log('Document captured successfully');
-            this.callbacks.onAutoCapture(correctedFile);
-            // Reset after a delay to allow for another capture if needed
-            setTimeout(() => {
-              this.captureTriggered = false;
-              this.stableFrames = 0;
-              this.consecutiveGoodFrames = 0;
-              this.cornerHistory = [];
-              this.lastCorners = null;
-              this.smoothedCorners = null;
-            }, 3000);
-          } else {
-            console.warn('Failed to create corrected file');
-            this.captureTriggered = false;
-          }
-        } catch (error) {
-          console.error('Error during capture:', error);
-          this.captureTriggered = false;
-        }
-      } else if (scaledCorners && !this.captureTriggered) {
-        // Debug info every few frames
-        if (this.frameSkip === 0 && this.stableFrames % 3 === 0 && scaledCorners) {
-          const rectangularity = this.calculateRectangularity(scaledCorners);
-          console.log('Detection status:', {
-            quality: quality.toFixed(2),
-            rectangularity: rectangularity.toFixed(2),
-            stable,
-            frames: this.stableFrames,
-            consecutiveGood: this.consecutiveGoodFrames,
-            required: quality > 0.5 ? 4 : 6,
-            willCapture: quality > 0.5 && rectangularity > 0.5 && this.stableFrames >= 5,
-            corners: scaledCorners
-          });
-        }
-      }
+      // No auto-capture - user will manually capture
     } catch (error) {
       console.error('Frame processing error:', error);
       this.captureTriggered = false;
@@ -880,7 +874,6 @@ export class SimpleDocumentDetectionService {
     this.cornerHistory = [];
     this.lastCorners = null;
     this.smoothedCorners = null;
-    this.captureTriggered = false;
     this.frameSkip = 0;
   }
 }

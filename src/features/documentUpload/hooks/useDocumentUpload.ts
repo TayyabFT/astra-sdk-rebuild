@@ -122,36 +122,44 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
     }
   };
 
-  const handleAutoCapture = async (file: File) => {
+  const handleManualCapture = async () => {
+    if (!detectionServiceRef.current || state.loading) return;
+    
     setState(prev => ({ ...prev, loading: true }));
     try {
-      // Create preview URL
-      const objectUrl = URL.createObjectURL(file);
-      setState(prev => ({
-        ...prev,
-        docPreviewUrl: objectUrl,
-        isDocScanMode: false,
-        loading: false,
-      }));
+      const file = await detectionServiceRef.current.captureDocument();
       
-      docPendingBlobRef.current = file;
-      
-      // Stop camera and detection
-      if (docStreamRef.current) {
-        docStreamRef.current.getTracks().forEach((t) => t.stop());
-        docStreamRef.current = null;
-      }
-      
-      if (detectionServiceRef.current) {
-        detectionServiceRef.current.cleanup();
-        detectionServiceRef.current = null;
-      }
-      
-      if (callbacks?.onScan) {
-        callbacks.onScan(file, state.docType);
+      if (file) {
+        // Create preview URL
+        const objectUrl = URL.createObjectURL(file);
+        setState(prev => ({
+          ...prev,
+          docPreviewUrl: objectUrl,
+          isDocScanMode: false,
+          loading: false,
+        }));
+        
+        docPendingBlobRef.current = file;
+        
+        // Stop camera and detection
+        if (docStreamRef.current) {
+          docStreamRef.current.getTracks().forEach((t) => t.stop());
+          docStreamRef.current = null;
+        }
+        
+        if (detectionServiceRef.current) {
+          detectionServiceRef.current.cleanup();
+          detectionServiceRef.current = null;
+        }
+        
+        if (callbacks?.onScan) {
+          callbacks.onScan(file, state.docType);
+        }
+      } else {
+        throw new Error('Failed to capture document');
       }
     } catch (err: any) {
-      console.error('Auto capture failed:', err);
+      console.error('Manual capture failed:', err);
       setState(prev => ({ ...prev, loading: false }));
       if (callbacks?.onError) {
         callbacks.onError(err);
@@ -192,8 +200,7 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
                 onDetection: () => {
                   // Optional: Update UI based on detection status
                   // You can add state for detection quality/status here if needed
-                },
-                onAutoCapture: handleAutoCapture
+                }
               }
             );
             
@@ -236,6 +243,7 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
     docOverlayCanvasRef,
     handleDocumentUpload,
     handleConfirmDocumentUpload,
+    handleManualCapture,
     startDocCamera,
   };
 }
