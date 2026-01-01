@@ -1,0 +1,117 @@
+import { useState, useEffect } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
+import { useSearchParams, useNavigate } from 'react-router-dom';
+import '../index.css';
+
+function QRCodePage() {
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [qrUrl, setQrUrl] = useState<string>('');
+  const [copied, setCopied] = useState<boolean>(false);
+
+  useEffect(() => {
+    const currentUrl = window.location.origin;
+
+    const params: Record<string, string> = {};
+    searchParams.forEach((value, key) => {
+      params[key] = value;
+    });
+
+    const mobileRoute = '/mobileroute';
+    const queryString = new URLSearchParams(params).toString();
+    const fullUrl = `${currentUrl}${mobileRoute}${queryString ? `?${queryString}` : ''}`;
+    
+    setQrUrl(fullUrl);
+  }, [searchParams]);
+
+  const handleCopyUrl = async () => {
+    if (qrUrl) {
+      try {
+        await navigator.clipboard.writeText(qrUrl);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy:', err);
+      }
+    }
+  };
+
+  const handleClose = () => {
+    navigate(-1);
+  };
+
+  const handleRefresh = () => {
+    window.location.reload();
+  };
+
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-black p-4 sm:p-6 md:p-8 z-[1000]">
+      <div className="relative bg-[rgba(20,20,20,0.95)] rounded-2xl p-5 sm:p-6 md:p-7 max-w-[450px] w-full h-[80vh] flex flex-col text-center shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+        <button 
+          className="absolute top-5 right-5 bg-transparent border-none text-white cursor-pointer p-2 flex items-center justify-center rounded transition-colors hover:bg-white/10 active:bg-white/20" 
+          onClick={handleClose} 
+          aria-label="Close"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+
+        <div className="flex flex-col items-center gap-3 sm:gap-4 flex-1 overflow-y-auto custom__scrollbar">
+          <h1 className="m-0 text-white text-xl sm:text-2xl font-semibold leading-tight">Continue on Mobile</h1>
+          <p className="m-0 text-white text-sm sm:text-base opacity-90 leading-relaxed">
+            Scan this QR on your phone to capture your face and document
+          </p>
+          
+          {qrUrl && (
+            <div className="flex justify-center items-center p-3 sm:p-4 bg-white rounded-xl border-2 border-white">
+              <QRCodeSVG
+                value={qrUrl}
+                size={180}
+                level="H"
+                includeMargin={true}
+                bgColor="transparent"
+                fgColor="#000000"
+              />
+            </div>
+          )}
+
+          <div className="w-full text-left mt-auto">
+            <p className="m-0 mb-2 text-white text-xs sm:text-sm opacity-80">Or open:</p>
+            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 p-2 sm:p-3 bg-white/10 rounded-lg border border-white/20">
+              <code className="flex-1 text-white text-xs sm:text-sm break-all text-left m-0 font-mono">{qrUrl}</code>
+              <button 
+                className="bg-transparent border-none text-white cursor-pointer p-1.5 flex items-center justify-center rounded transition-colors flex-shrink-0 hover:bg-white/10 active:bg-white/20 self-end sm:self-auto" 
+                onClick={handleCopyUrl}
+                aria-label="Copy URL"
+                title={copied ? 'Copied!' : 'Copy URL'}
+              >
+                {copied ? (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                  </svg>
+                )}
+              </button>
+            </div>
+          </div>
+
+          <button 
+            className="w-full py-3 sm:py-4 px-6 bg-gradient-to-r from-[#FF842D] to-[#FF2D55] border-none rounded-lg text-white text-sm sm:text-base font-semibold cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_12px_rgba(255,107,53,0.4)] active:translate-y-0" 
+            onClick={handleRefresh}
+          >
+            I've completed on mobile - Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default QRCodePage;
+
