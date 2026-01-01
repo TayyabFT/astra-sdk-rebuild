@@ -11,8 +11,6 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
     setState,
     fileInputRef,
     docVideoRef,
-    docCanvasRef,
-    docOverlayCanvasRef,
     handleDocumentUpload,
     handleConfirmDocumentUpload,
     handleManualCapture,
@@ -117,17 +115,8 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
                 ref={docVideoRef}
                 playsInline
                 muted
-                className="hidden"
-              />
-              <canvas
-                ref={docCanvasRef}
+                autoPlay
                 className="w-full h-full object-cover"
-                style={{ display: 'block' }}
-              />
-              <canvas
-                ref={docOverlayCanvasRef}
-                className="absolute inset-0 pointer-events-none"
-                style={{ display: 'block' }}
               />
             </div>
             <div className="flex gap-2">

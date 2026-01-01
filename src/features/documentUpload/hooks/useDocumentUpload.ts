@@ -1,6 +1,4 @@
 import { useState, useRef, useEffect } from 'react';
-import { SimpleDocumentDetectionService } from '../../../services/simpleDocumentDetectionService';
-import type { DocumentType } from '../types';
 import type { DocumentUploadCallbacks } from '../types';
 import type { DocumentUploadState } from '../types';
 
@@ -15,12 +13,8 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const docVideoRef = useRef<HTMLVideoElement>(null);
-  const docCanvasRef = useRef<HTMLCanvasElement>(null);
-  const docOverlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const docStreamRef = useRef<MediaStream | null>(null);
   const docPendingBlobRef = useRef<Blob | null>(null);
-  const processingRef = useRef<number | null>(null);
-  const detectionServiceRef = useRef<SimpleDocumentDetectionService | null>(null);
 
   const getRearStream = async (): Promise<MediaStream> => {
     const attempts: MediaStreamConstraints[] = [
@@ -123,43 +117,56 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
   };
 
   const handleManualCapture = async () => {
-    if (!detectionServiceRef.current || state.loading) return;
+    if (!docVideoRef.current || state.loading) return;
     
     setState(prev => ({ ...prev, loading: true }));
     try {
-      const file = await detectionServiceRef.current.captureDocument();
+      const video = docVideoRef.current;
       
-      if (file) {
-        // Create preview URL
-        const objectUrl = URL.createObjectURL(file);
-        setState(prev => ({
-          ...prev,
-          docPreviewUrl: objectUrl,
-          isDocScanMode: false,
-          loading: false,
-        }));
-        
-        docPendingBlobRef.current = file;
-        
-        // Stop camera and detection
-        if (docStreamRef.current) {
-          docStreamRef.current.getTracks().forEach((t) => t.stop());
-          docStreamRef.current = null;
-        }
-        
-        if (detectionServiceRef.current) {
-          detectionServiceRef.current.cleanup();
-          detectionServiceRef.current = null;
-        }
-        
-        if (callbacks?.onScan) {
-          callbacks.onScan(file, state.docType);
-        }
-      } else {
-        throw new Error('Failed to capture document');
+      // Create canvas and capture current frame
+      const canvas = document.createElement('canvas');
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+      canvas.width = width;
+      canvas.height = height;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas not supported');
+      
+      // Draw video frame to canvas
+      ctx.drawImage(video, 0, 0, width, height);
+      
+      // Convert to blob
+      const blob = await new Promise<Blob>((resolve) => {
+        canvas.toBlob((blob: Blob | null) => {
+          resolve(blob || new Blob());
+        }, 'image/jpeg', 0.92);
+      });
+      
+      const file = new File([blob], 'document.jpg', { type: 'image/jpeg' });
+      
+      // Create preview URL
+      const objectUrl = URL.createObjectURL(file);
+      setState(prev => ({
+        ...prev,
+        docPreviewUrl: objectUrl,
+        isDocScanMode: false,
+        loading: false,
+      }));
+      
+      docPendingBlobRef.current = file;
+      
+      // Stop camera
+      if (docStreamRef.current) {
+        docStreamRef.current.getTracks().forEach((t) => t.stop());
+        docStreamRef.current = null;
+      }
+      
+      if (callbacks?.onScan) {
+        callbacks.onScan(file, state.docType);
       }
     } catch (err: any) {
-      console.error('Manual capture failed:', err);
+      console.error('Capture failed:', err);
       setState(prev => ({ ...prev, loading: false }));
       if (callbacks?.onError) {
         callbacks.onError(err);
@@ -169,67 +176,13 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
 
   useEffect(() => {
     if (state.isDocScanMode) {
-      const initDetection = async () => {
-        await startDocCamera();
-        
-        // Wait for video to be ready
-        if (docVideoRef.current) {
-          const waitForVideo = () => {
-            return new Promise<void>((resolve) => {
-              const checkReady = () => {
-                if (docVideoRef.current && docVideoRef.current.readyState >= 2) {
-                  resolve();
-                } else {
-                  setTimeout(checkReady, 100);
-                }
-              };
-              checkReady();
-            });
-          };
-          
-          await waitForVideo();
-          
-          // Initialize detection service
-          if (docVideoRef.current && docCanvasRef.current && docOverlayCanvasRef.current) {
-            const service = new SimpleDocumentDetectionService(
-              docVideoRef,
-              docCanvasRef,
-              docOverlayCanvasRef,
-              processingRef,
-              {
-                onDetection: () => {
-                  // Optional: Update UI based on detection status
-                  // You can add state for detection quality/status here if needed
-                }
-              }
-            );
-            
-            detectionServiceRef.current = service;
-            service.start().catch((err) => {
-              console.error('Document detection failed:', err);
-              if (callbacks?.onError) {
-                callbacks.onError(err);
-              }
-            });
-          }
-        }
-      };
-      
-      initDetection();
+      startDocCamera();
     }
     
     return () => {
       if (docStreamRef.current) {
         docStreamRef.current.getTracks().forEach((t) => t.stop());
         docStreamRef.current = null;
-      }
-      if (detectionServiceRef.current) {
-        detectionServiceRef.current.cleanup();
-        detectionServiceRef.current = null;
-      }
-      if (processingRef.current) {
-        cancelAnimationFrame(processingRef.current);
-        processingRef.current = null;
       }
     };
   }, [state.isDocScanMode]);
@@ -239,8 +192,6 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
     setState,
     fileInputRef,
     docVideoRef,
-    docCanvasRef,
-    docOverlayCanvasRef,
     handleDocumentUpload,
     handleConfirmDocumentUpload,
     handleManualCapture,
