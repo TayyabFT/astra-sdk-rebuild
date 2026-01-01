@@ -2,7 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import type { DocumentUploadCallbacks } from '../types';
 import type { DocumentUploadState } from '../types';
 
-export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
+export interface DocumentUploadHookCallbacks extends DocumentUploadCallbacks {
+  onDocumentUpload?: (blob: Blob, docType: string) => Promise<void>;
+}
+
+export function useDocumentUpload(callbacks?: DocumentUploadHookCallbacks) {
   const [state, setState] = useState<DocumentUploadState>({
     docType: 'CNIC',
     isDocScanMode: false,
@@ -97,9 +101,21 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
     if (state.loading || !docPendingBlobRef.current) return;
     setState(prev => ({ ...prev, loading: true }));
     try {
-      if (callbacks?.onUpload) {
-        callbacks.onUpload(docPendingBlobRef.current as File, state.docType);
+      const file = docPendingBlobRef.current as File;
+      
+      // Upload document if callback provided
+      if (callbacks?.onDocumentUpload) {
+        try {
+          await callbacks.onDocumentUpload(file, state.docType);
+        } catch (uploadError: any) {
+          throw new Error(uploadError.message || 'Failed to upload document');
+        }
       }
+      
+      if (callbacks?.onUpload) {
+        callbacks.onUpload(file, state.docType);
+      }
+      
       setState(prev => ({
         ...prev,
         docPreviewUrl: null,
@@ -144,6 +160,15 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
       });
       
       const file = new File([blob], 'document.jpg', { type: 'image/jpeg' });
+      
+      // Upload document if callback provided
+      if (callbacks?.onDocumentUpload) {
+        try {
+          await callbacks.onDocumentUpload(file, state.docType);
+        } catch (uploadError: any) {
+          throw new Error(uploadError.message || 'Failed to upload document');
+        }
+      }
       
       // Create preview URL
       const objectUrl = URL.createObjectURL(file);

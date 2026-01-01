@@ -3,9 +3,16 @@ import { FaceMeshService } from '../../../services/faceMeshService';
 import type { LivenessStage } from '../../../services/faceMeshService';
 import type { FaceScanState, LivenessRefs } from '../types';
 
+export interface FaceScanCallbacks {
+  onFaceCaptureComplete?: (imageData: string) => void;
+  onLivenessFailedCallback?: (failed: boolean) => void;
+  onFaceUpload?: (blob: Blob) => Promise<void>;
+}
+
 export function useFaceScan(
   videoRef: React.RefObject<HTMLVideoElement | null>,
-  canvasRef: React.RefObject<HTMLCanvasElement | null>
+  canvasRef: React.RefObject<HTMLCanvasElement | null>,
+  callbacks?: FaceScanCallbacks
 ) {
   const [state, setState] = useState<FaceScanState>({
     cameraReady: false,
@@ -80,13 +87,37 @@ export function useFaceScan(
       ctx.drawImage(video, 0, 0, width, height);
       const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
       
-      setState(prev => ({
-        ...prev,
-        capturedImage: dataUrl,
-        allStepsCompleted: true,
-        livenessInstruction: "Face captured successfully!",
-        loading: false,
-      }));
+      // Convert data URL to blob
+      const blob = await (await fetch(dataUrl)).blob();
+      
+      // Upload face scan if callback provided
+      if (callbacks?.onFaceUpload) {
+        try {
+          await callbacks.onFaceUpload(blob);
+          setState(prev => ({
+            ...prev,
+            capturedImage: dataUrl,
+            allStepsCompleted: true,
+            livenessInstruction: "Face captured and uploaded successfully!",
+            loading: false,
+          }));
+        } catch (uploadError: any) {
+          throw new Error(uploadError.message || 'Failed to upload face scan');
+        }
+      } else {
+        setState(prev => ({
+          ...prev,
+          capturedImage: dataUrl,
+          allStepsCompleted: true,
+          livenessInstruction: "Face captured successfully!",
+          loading: false,
+        }));
+      }
+      
+      // Call completion callback
+      if (callbacks?.onFaceCaptureComplete) {
+        callbacks.onFaceCaptureComplete(dataUrl);
+      }
       
       setTimeout(() => {
         setState(prev => ({ ...prev, showDocumentUpload: true }));
@@ -95,11 +126,11 @@ export function useFaceScan(
       console.error('Error capturing image:', err);
       setState(prev => ({
         ...prev,
-        livenessInstruction: 'Error capturing image. Please try again.',
+        livenessInstruction: err.message || 'Error capturing image. Please try again.',
         loading: false,
       }));
     }
-  }, []);
+  }, [callbacks]);
 
   useEffect(() => {
     refs.handleFaceCapture.current = handleFaceCapture;

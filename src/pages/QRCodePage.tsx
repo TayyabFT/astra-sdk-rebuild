@@ -3,7 +3,11 @@ import { QRCodeSVG } from 'qrcode.react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import '../index.css';
 
-function QRCodePage() {
+interface QRCodePageProps {
+  onClose?: () => void;
+}
+
+function QRCodePage({ onClose }: QRCodePageProps = {}) {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const [qrUrl, setQrUrl] = useState<string>('');
@@ -37,7 +41,11 @@ function QRCodePage() {
   };
 
   const handleClose = () => {
-    navigate(-1);
+    if (onClose) {
+      onClose();
+    } else {
+      navigate(-1);
+    }
   };
 
   const handleRefresh = () => {

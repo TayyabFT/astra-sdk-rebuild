@@ -1,7 +1,9 @@
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import DocumentUploadModal from './DocumentUploadModal';
 import { useCamera } from '../features/faceScan/hooks/useCamera';
 import { useFaceScan } from '../features/faceScan/hooks/useFaceScan';
+import { useKycContext } from '../contexts/KycContext';
 import '../index.css';
 
 interface FaceScanModalProps {
@@ -9,11 +11,47 @@ interface FaceScanModalProps {
   onComplete?: (capturedImage: string) => void;
 }
 
-function FaceScanModal({ onClose, onComplete }: FaceScanModalProps) {
+function FaceScanModal({ onComplete }: FaceScanModalProps) {
   const faceCanvasRef = useRef<HTMLCanvasElement>(null);
+  const navigate = useNavigate();
+  const { apiService } = useKycContext();
+  const [sessionError, setSessionError] = useState<string | null>(null);
   
   const { videoRef, cameraReady, stopCamera } = useCamera();
-  const { state, setState, refs, handleFaceCapture } = useFaceScan(videoRef, faceCanvasRef);
+  const { state, setState, refs, handleFaceCapture } = useFaceScan(videoRef, faceCanvasRef, {
+    onFaceUpload: async (blob: Blob) => {
+      if (!apiService) {
+        throw new Error('API service not initialized');
+      }
+      await apiService.uploadFaceScan(blob);
+    },
+    onFaceCaptureComplete: (imageData: string) => {
+      if (onComplete) {
+        onComplete(imageData);
+      }
+    },
+  });
+  
+  // Check session status on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      if (!apiService) return;
+      
+      try {
+        await apiService.checkSessionActive();
+        setSessionError(null);
+      } catch (error: any) {
+        const message = error.message || 'Session expired or inactive';
+        setSessionError(message);
+        // Redirect to QR page after showing error
+        setTimeout(() => {
+          navigate('/qr', { replace: true });
+        }, 2000);
+      }
+    };
+    
+    checkSession();
+  }, [apiService, navigate]);
 
   // Sync camera ready state
   useEffect(() => {
@@ -58,6 +96,23 @@ function FaceScanModal({ onClose, onComplete }: FaceScanModalProps) {
           }
         }}
       />
+    );
+  }
+
+  // Show session error if present
+  if (sessionError) {
+    return (
+      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+        <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl">
+          <div className="text-center">
+            <h2 className="m-0 mb-4 text-[26px] font-bold text-red-500">
+              Session Expired
+            </h2>
+            <p className="text-[#e5e7eb] mb-4">{sessionError}</p>
+            <p className="text-[#9ca3af] text-sm">Redirecting to QR code page...</p>
+          </div>
+        </div>
+      </div>
     );
   }
 

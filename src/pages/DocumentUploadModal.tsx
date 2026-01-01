@@ -1,4 +1,7 @@
+import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useDocumentUpload } from '../features/documentUpload/hooks/useDocumentUpload';
+import { useKycContext } from '../contexts/KycContext';
 import type { DocumentType } from '../features/documentUpload/types';
 
 interface DocumentUploadModalProps {
@@ -6,6 +9,10 @@ interface DocumentUploadModalProps {
 }
 
 function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
+  const navigate = useNavigate();
+  const { apiService } = useKycContext();
+  const [sessionError, setSessionError] = useState<string | null>(null);
+  
   const {
     state,
     setState,
@@ -16,6 +23,12 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
     handleManualCapture,
     startDocCamera,
   } = useDocumentUpload({
+    onDocumentUpload: async (blob: Blob, docType: string) => {
+      if (!apiService) {
+        throw new Error('API service not initialized');
+      }
+      await apiService.uploadDocument(blob, docType);
+    },
     onUpload: (file, docType) => {
       if (onComplete) {
         onComplete(file, docType);
@@ -27,7 +40,45 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
       }
     },
   });
+  
+  // Check session status on mount
+  useEffect(() => {
+    const checkSession = async () => {
+      if (!apiService) return;
+      
+      try {
+        await apiService.checkSessionActive();
+        setSessionError(null);
+      } catch (error: any) {
+        const message = error.message || 'Session expired or inactive';
+        setSessionError(message);
+        // Redirect to QR page after showing error
+        setTimeout(() => {
+          navigate('/qr', { replace: true });
+        }, 2000);
+      }
+    };
+    
+    checkSession();
+  }, [apiService, navigate]);
 
+
+  // Show session error if present
+  if (sessionError) {
+    return (
+      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+        <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl">
+          <div className="text-center">
+            <h2 className="m-0 mb-4 text-[26px] font-bold text-red-500">
+              Session Expired
+            </h2>
+            <p className="text-[#e5e7eb] mb-4">{sessionError}</p>
+            <p className="text-[#9ca3af] text-sm">Redirecting to QR code page...</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">

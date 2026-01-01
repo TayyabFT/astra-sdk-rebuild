@@ -4,7 +4,11 @@ import { isMobileDevice } from '../utils/deviceDetection';
 import FaceScanModal from './FaceScanModal';
 import '../index.css';
 
-function MobileRoute() {
+interface MobileRouteProps {
+  onClose?: () => void;
+}
+
+function MobileRoute({ onClose }: MobileRouteProps = {}) {
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -15,7 +19,11 @@ function MobileRoute() {
   }, [navigate]);
 
   const handleClose = () => {
-    navigate(-1);
+    if (onClose) {
+      onClose();
+    } else {
+      navigate(-1);
+    }
   };
 
   const handleComplete = (capturedImage: string) => {
