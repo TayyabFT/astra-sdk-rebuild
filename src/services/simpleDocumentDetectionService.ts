@@ -63,25 +63,38 @@ export class SimpleDocumentDetectionService {
       gray[i / 4] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
     }
     
-    // Optimized Sobel with step for performance
+    // Apply Gaussian blur for noise reduction (simplified)
+    const blurred = new Uint8ClampedArray(width * height);
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const idx = y * width + x;
+        blurred[idx] = (
+          gray[(y - 1) * width + (x - 1)] + gray[(y - 1) * width + x] + gray[(y - 1) * width + (x + 1)] +
+          gray[y * width + (x - 1)] + gray[idx] * 2 + gray[y * width + (x + 1)] +
+          gray[(y + 1) * width + (x - 1)] + gray[(y + 1) * width + x] + gray[(y + 1) * width + (x + 1)]
+        ) / 10;
+      }
+    }
+    
+    // Optimized Sobel with adaptive threshold
     const step = Math.max(1, Math.floor(scale));
-    const threshold = 40;
+    let threshold = 30; // Lower threshold for better detection
     
     for (let y = 1; y < height - 1; y += step) {
       for (let x = 1; x < width - 1; x += step) {
         const idx = y * width + x;
         
-        // Fast Sobel approximation
+        // Fast Sobel approximation using blurred image
         const gx = 
-          -gray[(y - 1) * width + (x - 1)] + gray[(y - 1) * width + (x + 1)]
-          - 2 * gray[y * width + (x - 1)] + 2 * gray[y * width + (x + 1)]
-          -gray[(y + 1) * width + (x - 1)] + gray[(y + 1) * width + (x + 1)];
+          -blurred[(y - 1) * width + (x - 1)] + blurred[(y - 1) * width + (x + 1)]
+          - 2 * blurred[y * width + (x - 1)] + 2 * blurred[y * width + (x + 1)]
+          -blurred[(y + 1) * width + (x - 1)] + blurred[(y + 1) * width + (x + 1)];
         
         const gy = 
-          -gray[(y - 1) * width + (x - 1)] - 2 * gray[(y - 1) * width + x] - gray[(y - 1) * width + (x + 1)]
-          +gray[(y + 1) * width + (x - 1)] + 2 * gray[(y + 1) * width + x] + gray[(y + 1) * width + (x + 1)];
+          -blurred[(y - 1) * width + (x - 1)] - 2 * blurred[(y - 1) * width + x] - blurred[(y - 1) * width + (x + 1)]
+          +blurred[(y + 1) * width + (x - 1)] + 2 * blurred[(y + 1) * width + x] + blurred[(y + 1) * width + (x + 1)];
         
-        const magnitude = Math.abs(gx) + Math.abs(gy); // Faster than sqrt
+        const magnitude = Math.abs(gx) + Math.abs(gy);
         const edgeValue = magnitude > threshold ? 255 : 0;
         const pixelIdx = (y * width + x) * 4;
         
@@ -154,9 +167,11 @@ export class SimpleDocumentDetectionService {
   private approximatePolygon(contour: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> {
     if (contour.length < 4) return contour;
     
-    // Douglas-Peucker algorithm simplified
+    // Improved Douglas-Peucker algorithm
     const simplified: Array<{ x: number; y: number }> = [];
     const n = contour.length;
+    
+    if (n <= 2) return contour;
     
     // Find the point farthest from the line between first and last
     let maxDist = 0;
@@ -173,10 +188,37 @@ export class SimpleDocumentDetectionService {
     if (maxDist > epsilon) {
       const left = this.approximatePolygon(contour.slice(0, maxIndex + 1), epsilon);
       const right = this.approximatePolygon(contour.slice(maxIndex), epsilon);
+      // Merge results, avoiding duplicate point
       return [...left.slice(0, -1), ...right];
     } else {
+      // If no point is far enough, return just the endpoints
       return [contour[0], contour[n - 1]];
     }
+  }
+  
+  private findBest4Corners(contour: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> | null {
+    // If we have exactly 4 points, return them
+    if (contour.length === 4) return contour;
+    
+    // If we have more than 4, find the 4 most corner-like points
+    if (contour.length > 4) {
+      // Find convex hull or use corner detection
+      // Simple approach: find points with maximum/minimum x and y
+      let minX = contour[0], maxX = contour[0];
+      let minY = contour[0], maxY = contour[0];
+      
+      for (const point of contour) {
+        if (point.x < minX.x) minX = point;
+        if (point.x > maxX.x) maxX = point;
+        if (point.y < minY.y) minY = point;
+        if (point.y > maxY.y) maxY = point;
+      }
+      
+      // Return the 4 extreme points
+      return [minX, maxY, maxX, minY];
+    }
+    
+    return null;
   }
 
   private pointToLineDistance(point: { x: number; y: number }, lineStart: { x: number; y: number }, lineEnd: { x: number; y: number }): number {
@@ -212,30 +254,111 @@ export class SimpleDocumentDetectionService {
     
     if (contours.length === 0) return null;
     
-    // Find the largest contour
-    let largestContour = contours[0];
-    let maxArea = this.calculateContourArea(largestContour);
+    const minArea = (edges.width * edges.height) * 0.1; // 10% of image area - more strict
+    const maxArea = (edges.width * edges.height) * 0.9; // Max 90% of image area
+    
+    // Find the best contour (largest, most rectangular)
+    let bestContour: Array<{ x: number; y: number }> | null = null;
+    let bestScore = 0;
     
     for (const contour of contours) {
       const area = this.calculateContourArea(contour);
-      // Adjusted minimum area - scale with image size
-      const minArea = (edges.width * edges.height) * 0.05; // 5% of image area
-      if (area > maxArea && area > minArea) {
-        maxArea = area;
-        largestContour = contour;
+      
+      // Filter by area
+      if (area < minArea || area > maxArea) continue;
+      
+      // Approximate to polygon with different epsilon values to find best fit
+      let bestApprox: Array<{ x: number; y: number }> | null = null;
+      let bestEpsilon = 0;
+      
+      // Try different epsilon values
+      for (let epsFactor = 0.01; epsFactor <= 0.05; epsFactor += 0.01) {
+        const epsilon = epsFactor * this.calculatePerimeter(contour);
+        const approx = this.approximatePolygon(contour, epsilon);
+        
+        // Prefer 4-corner approximations
+        if (approx.length === 4) {
+          bestApprox = approx;
+          bestEpsilon = epsilon;
+          break; // Found 4 corners, use this
+        } else if (approx.length > 4 && approx.length < 8 && !bestApprox) {
+          // Keep this as backup if we don't find 4 corners
+          bestApprox = approx;
+          bestEpsilon = epsilon;
+        }
+      }
+      
+      // If we didn't get exactly 4 corners, try to extract 4 corners from the approximation
+      if (bestApprox && bestApprox.length !== 4) {
+        const fourCorners = this.findBest4Corners(bestApprox);
+        if (fourCorners) {
+          bestApprox = fourCorners;
+        } else {
+          continue; // Skip this contour if we can't get 4 corners
+        }
+      }
+      
+      if (!bestApprox || bestApprox.length !== 4) continue;
+      
+      // Calculate rectangle score (how rectangular is it?)
+      const corners = this.orderPoints(bestApprox);
+      const rectScore = this.calculateRectangularity(corners);
+      
+      // Combined score: area (normalized) + rectangularity
+      const normalizedArea = area / (edges.width * edges.height);
+      const score = normalizedArea * 0.4 + rectScore * 0.6;
+      
+      if (score > bestScore) {
+        bestScore = score;
+        bestContour = bestApprox;
       }
     }
     
-    // Approximate to polygon
-    const epsilon = 0.02 * this.calculatePerimeter(largestContour);
-    const approx = this.approximatePolygon(largestContour, epsilon);
-    
-    // Check if we have 4 corners
-    if (approx.length === 4) {
-      return this.orderPoints(approx);
+    if (bestContour && bestContour.length === 4) {
+      return this.orderPoints(bestContour);
     }
     
     return null;
+  }
+
+  private calculateRectangularity(corners: DocumentCorners): number {
+    // Calculate how close the shape is to a rectangle
+    const width1 = Math.sqrt(
+      Math.pow(corners.topRight.x - corners.topLeft.x, 2) +
+      Math.pow(corners.topRight.y - corners.topLeft.y, 2)
+    );
+    const width2 = Math.sqrt(
+      Math.pow(corners.bottomRight.x - corners.bottomLeft.x, 2) +
+      Math.pow(corners.bottomRight.y - corners.bottomLeft.y, 2)
+    );
+    const height1 = Math.sqrt(
+      Math.pow(corners.bottomLeft.x - corners.topLeft.x, 2) +
+      Math.pow(corners.bottomLeft.y - corners.topLeft.y, 2)
+    );
+    const height2 = Math.sqrt(
+      Math.pow(corners.bottomRight.x - corners.topRight.x, 2) +
+      Math.pow(corners.bottomRight.y - corners.topRight.y, 2)
+    );
+    
+    // Check if opposite sides are similar length (rectangular)
+    const widthRatio = Math.min(width1, width2) / Math.max(width1, width2);
+    const heightRatio = Math.min(height1, height2) / Math.max(height1, height2);
+    
+    // Check angles (should be close to 90 degrees)
+    const angle1 = Math.abs(
+      Math.atan2(corners.topRight.y - corners.topLeft.y, corners.topRight.x - corners.topLeft.x) -
+      Math.atan2(corners.bottomLeft.y - corners.topLeft.y, corners.bottomLeft.x - corners.topLeft.x)
+    );
+    const angle2 = Math.abs(
+      Math.atan2(corners.bottomRight.y - corners.topRight.y, corners.bottomRight.x - corners.topRight.x) -
+      Math.atan2(corners.topRight.y - corners.topLeft.y, corners.topRight.x - corners.topLeft.x)
+    );
+    
+    const angle1Score = 1 - Math.abs(angle1 - Math.PI / 2) / (Math.PI / 2);
+    const angle2Score = 1 - Math.abs(angle2 - Math.PI / 2) / (Math.PI / 2);
+    
+    // Combined rectangularity score
+    return (widthRatio * 0.3 + heightRatio * 0.3 + angle1Score * 0.2 + angle2Score * 0.2);
   }
 
   private calculateContourArea(contour: Array<{ x: number; y: number }>): number {
@@ -430,8 +553,12 @@ export class SimpleDocumentDetectionService {
     const displayCorners = this.smoothCorners(corners);
 
     if (displayCorners) {
-      ctx.strokeStyle = quality > 0.7 ? '#22c55e' : quality > 0.4 ? '#f59e0b' : '#ef4444';
-      ctx.lineWidth = 3;
+      const rectangularity = this.calculateRectangularity(displayCorners);
+      const isReady = quality > 0.5 && rectangularity > 0.5 && this.stableFrames >= 5;
+      
+      // Color based on readiness
+      ctx.strokeStyle = isReady ? '#22c55e' : quality > 0.5 ? '#f59e0b' : '#ef4444';
+      ctx.lineWidth = isReady ? 4 : 3;
       ctx.beginPath();
       ctx.moveTo(displayCorners.topLeft.x, displayCorners.topLeft.y);
       ctx.lineTo(displayCorners.topRight.x, displayCorners.topRight.y);
@@ -440,16 +567,27 @@ export class SimpleDocumentDetectionService {
       ctx.closePath();
       ctx.stroke();
 
-      const cornerColor = quality > 0.7 ? '#22c55e' : '#f59e0b';
+      // Draw corner markers
+      const cornerColor = isReady ? '#22c55e' : quality > 0.5 ? '#f59e0b' : '#ef4444';
       ctx.fillStyle = cornerColor;
       [displayCorners.topLeft, displayCorners.topRight, displayCorners.bottomRight, displayCorners.bottomLeft].forEach(point => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 8, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, isReady ? 10 : 8, 0, Math.PI * 2);
         ctx.fill();
       });
 
-      if (quality > 0.7) {
-        ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
+      // Fill area if ready to capture
+      if (isReady) {
+        ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
+        ctx.fill();
+        
+        // Draw "Ready to capture" indicator
+        ctx.fillStyle = '#22c55e';
+        ctx.font = 'bold 16px Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText('Ready to capture', width / 2, 30);
+      } else if (quality > 0.5) {
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.1)';
         ctx.fill();
       }
     }
@@ -654,9 +792,12 @@ export class SimpleDocumentDetectionService {
       }
 
       // Auto-capture when conditions are met
-      // Very lenient: if document is detected and stable for a few frames, capture it
-      const shouldCapture = scaledCorners && 
-                           quality > 0.4 && 
+      // Ensure document is properly detected and frame is aligned
+      const isProperlyDetected = scaledCorners && 
+                                this.calculateRectangularity(scaledCorners) > 0.5 && // Must be reasonably rectangular
+                                quality > 0.5; // Minimum quality
+      
+      const shouldCapture = isProperlyDetected && 
                            this.stableFrames >= 5 && 
                            !this.captureTriggered && 
                            this.callbacks.onAutoCapture;
@@ -696,15 +837,17 @@ export class SimpleDocumentDetectionService {
         }
       } else if (scaledCorners && !this.captureTriggered) {
         // Debug info every few frames
-        if (this.frameSkip === 0 && this.stableFrames % 3 === 0) {
+        if (this.frameSkip === 0 && this.stableFrames % 3 === 0 && scaledCorners) {
+          const rectangularity = this.calculateRectangularity(scaledCorners);
           console.log('Detection status:', {
             quality: quality.toFixed(2),
+            rectangularity: rectangularity.toFixed(2),
             stable,
             frames: this.stableFrames,
             consecutiveGood: this.consecutiveGoodFrames,
             required: quality > 0.5 ? 4 : 6,
-            willCapture: quality > 0.4 && this.stableFrames >= 5,
-            corners: scaledCorners ? 'detected' : 'none'
+            willCapture: quality > 0.5 && rectangularity > 0.5 && this.stableFrames >= 5,
+            corners: scaledCorners
           });
         }
       }
