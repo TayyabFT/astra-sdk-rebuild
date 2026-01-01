@@ -17,21 +17,13 @@ export interface DocumentDetectionCallbacks {
   onAutoCapture?: (correctedImage: File) => void;
 }
 
-declare global {
-  interface Window {
-    cv: any;
-  }
-}
-
-export class DocumentDetectionService {
+export class SimpleDocumentDetectionService {
   private videoRef: React.RefObject<HTMLVideoElement | null>;
   private canvasRef: React.RefObject<HTMLCanvasElement | null>;
   private overlayCanvasRef: React.RefObject<HTMLCanvasElement | null>;
   private callbacks: DocumentDetectionCallbacks;
   private processingRef: React.MutableRefObject<number | null>;
   private cancelled = false;
-  private cv: any = null;
-  private cvReady = false;
   
   // Detection state
   private stableFrames = 0;
@@ -54,113 +46,210 @@ export class DocumentDetectionService {
     this.callbacks = callbacks;
   }
 
-  async loadOpenCV(): Promise<void> {
-    if (this.cvReady && this.cv) {
-      return;
+  private detectEdges(imageData: ImageData): Uint8ClampedArray {
+    const data = imageData.data;
+    const width = imageData.width;
+    const height = imageData.height;
+    const edges = new Uint8ClampedArray(data.length);
+    
+    // Convert to grayscale first
+    const gray = new Uint8ClampedArray(width * height);
+    for (let i = 0; i < data.length; i += 4) {
+      const grayValue = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      gray[i / 4] = grayValue;
     }
-
-    // Use dynamic import for opencv-wasm to avoid conflicts with MediaPipe
-    try {
-      // Try to use opencv-wasm which is designed to work alongside other WASM modules
-      const cvModule = await import('opencv-wasm');
-      this.cv = cvModule.default || cvModule;
-      this.cvReady = true;
-      return;
-    } catch (importError) {
-      // Fallback to CDN if npm package is not available
-      console.warn('opencv-wasm not available, trying CDN fallback');
-    }
-
-    return new Promise((resolve, reject) => {
-      // Check if OpenCV is already loaded in a namespace
-      if (window.cv && window.cv.Mat) {
-        // Check if it's the conflicting version
-        if (window.cv.onRuntimeInitialized) {
-          // This is the old version that conflicts, we need a different approach
-          reject(new Error('OpenCV.js conflicts with MediaPipe. Please use opencv-wasm package instead.'));
-          return;
+    
+    // Sobel edge detection
+    const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
+    const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+    
+    for (let y = 1; y < height - 1; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        let gx = 0, gy = 0;
+        for (let ky = -1; ky <= 1; ky++) {
+          for (let kx = -1; kx <= 1; kx++) {
+            const idx = (y + ky) * width + (x + kx);
+            const kernelIdx = (ky + 1) * 3 + (kx + 1);
+            gx += gray[idx] * sobelX[kernelIdx];
+            gy += gray[idx] * sobelY[kernelIdx];
+          }
         }
-        this.cv = window.cv;
-        this.cvReady = true;
-        resolve();
-        return;
+        const magnitude = Math.sqrt(gx * gx + gy * gy);
+        const idx = (y * width + x) * 4;
+        const edgeValue = magnitude > 50 ? 255 : 0; // Threshold
+        edges[idx] = edgeValue;
+        edges[idx + 1] = edgeValue;
+        edges[idx + 2] = edgeValue;
+        edges[idx + 3] = 255;
       }
-
-      // Check if script already exists
-      const existingScript = document.querySelector('script[data-opencv]');
-      if (existingScript) {
-        const checkReady = setInterval(() => {
-          if (window.cv && window.cv.Mat && !window.cv.onRuntimeInitialized) {
-            clearInterval(checkReady);
-            this.cv = window.cv;
-            this.cvReady = true;
-            resolve();
-          }
-        }, 100);
-        
-        setTimeout(() => {
-          clearInterval(checkReady);
-          if (!this.cvReady) {
-            reject(new Error('OpenCV.js conflicts with MediaPipe WASM. Cannot load both simultaneously.'));
-          }
-        }, 5000);
-        return;
-      }
-
-      reject(new Error('OpenCV.js cannot be loaded due to conflict with MediaPipe. Please install opencv-wasm: npm install opencv-wasm'));
-    });
+    }
+    
+    return edges;
   }
 
-  private findDocumentContour(edges: any): any {
-    const contours = new this.cv.MatVector();
-    const hierarchy = new this.cv.Mat();
-    this.cv.findContours(edges, contours, hierarchy, this.cv.RETR_EXTERNAL, this.cv.CHAIN_APPROX_SIMPLE);
+  private findContours(edges: ImageData): Array<Array<{ x: number; y: number }>> {
+    const width = edges.width;
+    const height = edges.height;
+    const data = edges.data;
+    const visited = new Set<string>();
+    const contours: Array<Array<{ x: number; y: number }>> = [];
+    
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        const key = `${x},${y}`;
+        
+        if (data[idx] > 128 && !visited.has(key)) {
+          const contour: Array<{ x: number; y: number }> = [];
+          const stack: Array<{ x: number; y: number }> = [{ x, y }];
+          
+          while (stack.length > 0) {
+            const point = stack.pop()!;
+            const pointKey = `${point.x},${point.y}`;
+            
+            if (visited.has(pointKey)) continue;
+            visited.add(pointKey);
+            contour.push(point);
+            
+            // Check 8 neighbors
+            for (let dy = -1; dy <= 1; dy++) {
+              for (let dx = -1; dx <= 1; dx++) {
+                if (dx === 0 && dy === 0) continue;
+                const nx = point.x + dx;
+                const ny = point.y + dy;
+                
+                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                  const nIdx = (ny * width + nx) * 4;
+                  const nKey = `${nx},${ny}`;
+                  if (data[nIdx] > 128 && !visited.has(nKey)) {
+                    stack.push({ x: nx, y: ny });
+                  }
+                }
+              }
+            }
+          }
+          
+          if (contour.length > 100) { // Minimum contour size
+            contours.push(contour);
+          }
+        }
+      }
+    }
+    
+    return contours;
+  }
 
-    let largestContour: any = null;
-    let maxArea = 0;
+  private approximatePolygon(contour: Array<{ x: number; y: number }>, epsilon: number): Array<{ x: number; y: number }> {
+    if (contour.length < 4) return contour;
+    
+    // Douglas-Peucker algorithm simplified
+    const simplified: Array<{ x: number; y: number }> = [];
+    const n = contour.length;
+    
+    // Find the point farthest from the line between first and last
+    let maxDist = 0;
+    let maxIndex = 0;
+    
+    for (let i = 1; i < n - 1; i++) {
+      const dist = this.pointToLineDistance(contour[i], contour[0], contour[n - 1]);
+      if (dist > maxDist) {
+        maxDist = dist;
+        maxIndex = i;
+      }
+    }
+    
+    if (maxDist > epsilon) {
+      const left = this.approximatePolygon(contour.slice(0, maxIndex + 1), epsilon);
+      const right = this.approximatePolygon(contour.slice(maxIndex), epsilon);
+      return [...left.slice(0, -1), ...right];
+    } else {
+      return [contour[0], contour[n - 1]];
+    }
+  }
 
-    for (let i = 0; i < contours.size(); i++) {
-      const contour = contours.get(i);
-      const area = this.cv.contourArea(contour);
-      
+  private pointToLineDistance(point: { x: number; y: number }, lineStart: { x: number; y: number }, lineEnd: { x: number; y: number }): number {
+    const A = point.x - lineStart.x;
+    const B = point.y - lineStart.y;
+    const C = lineEnd.x - lineStart.x;
+    const D = lineEnd.y - lineStart.y;
+    
+    const dot = A * C + B * D;
+    const lenSq = C * C + D * D;
+    const param = lenSq !== 0 ? dot / lenSq : -1;
+    
+    let xx: number, yy: number;
+    
+    if (param < 0) {
+      xx = lineStart.x;
+      yy = lineStart.y;
+    } else if (param > 1) {
+      xx = lineEnd.x;
+      yy = lineEnd.y;
+    } else {
+      xx = lineStart.x + param * C;
+      yy = lineStart.y + param * D;
+    }
+    
+    const dx = point.x - xx;
+    const dy = point.y - yy;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  private findDocumentContour(edges: ImageData): DocumentCorners | null {
+    const contours = this.findContours(edges);
+    
+    if (contours.length === 0) return null;
+    
+    // Find the largest contour
+    let largestContour = contours[0];
+    let maxArea = this.calculateContourArea(largestContour);
+    
+    for (const contour of contours) {
+      const area = this.calculateContourArea(contour);
       if (area > maxArea && area > 10000) { // Minimum area threshold
-        const peri = this.cv.arcLength(contour, true);
-        const approx = new this.cv.Mat();
-        this.cv.approxPolyDP(contour, approx, 0.02 * peri, true);
-        
-        // Check if it's a quadrilateral (4 corners)
-        if (approx.rows === 4) {
-          maxArea = area;
-          largestContour = approx;
-        } else {
-          approx.delete();
-        }
+        maxArea = area;
+        largestContour = contour;
       }
-      contour.delete();
     }
-
-    hierarchy.delete();
-    contours.delete();
-
-    return largestContour;
+    
+    // Approximate to polygon
+    const epsilon = 0.02 * this.calculatePerimeter(largestContour);
+    const approx = this.approximatePolygon(largestContour, epsilon);
+    
+    // Check if we have 4 corners
+    if (approx.length === 4) {
+      return this.orderPoints(approx);
+    }
+    
+    return null;
   }
 
-  private orderPoints(contour: any): DocumentCorners | null {
-    if (!contour || contour.rows !== 4) return null;
-
-    const points: Array<{ x: number; y: number }> = [];
-    for (let i = 0; i < 4; i++) {
-      const point = contour.data32S;
-      points.push({
-        x: point[i * 2],
-        y: point[i * 2 + 1]
-      });
+  private calculateContourArea(contour: Array<{ x: number; y: number }>): number {
+    let area = 0;
+    for (let i = 0; i < contour.length; i++) {
+      const j = (i + 1) % contour.length;
+      area += contour[i].x * contour[j].y;
+      area -= contour[j].x * contour[i].y;
     }
+    return Math.abs(area / 2);
+  }
 
-    // Sort points: top-left, top-right, bottom-right, bottom-left
-    points.sort((a, b) => a.y - b.y);
-    const topPoints = points.slice(0, 2).sort((a, b) => a.x - b.x);
-    const bottomPoints = points.slice(2, 4).sort((a, b) => a.x - b.x);
+  private calculatePerimeter(contour: Array<{ x: number; y: number }>): number {
+    let perimeter = 0;
+    for (let i = 0; i < contour.length; i++) {
+      const j = (i + 1) % contour.length;
+      const dx = contour[j].x - contour[i].x;
+      const dy = contour[j].y - contour[i].y;
+      perimeter += Math.sqrt(dx * dx + dy * dy);
+    }
+    return perimeter;
+  }
+
+  private orderPoints(points: Array<{ x: number; y: number }>): DocumentCorners {
+    // Sort by y-coordinate
+    const sorted = [...points].sort((a, b) => a.y - b.y);
+    const topPoints = sorted.slice(0, 2).sort((a, b) => a.x - b.x);
+    const bottomPoints = sorted.slice(2, 4).sort((a, b) => a.x - b.x);
 
     return {
       topLeft: topPoints[0],
@@ -171,8 +260,6 @@ export class DocumentDetectionService {
   }
 
   private calculateQuality(corners: DocumentCorners, width: number, height: number): number {
-    if (!corners) return 0;
-
     // Check if corners are within frame bounds
     const margin = 20;
     const inBounds = 
@@ -183,7 +270,7 @@ export class DocumentDetectionService {
 
     if (!inBounds) return 0;
 
-    // Calculate aspect ratio (should be close to document ratio)
+    // Calculate aspect ratio
     const width1 = Math.sqrt(
       Math.pow(corners.topRight.x - corners.topLeft.x, 2) +
       Math.pow(corners.topRight.y - corners.topLeft.y, 2)
@@ -205,7 +292,6 @@ export class DocumentDetectionService {
     const avgHeight = (height1 + height2) / 2;
     const aspectRatio = avgWidth / avgHeight;
 
-    // Check if aspect ratio is reasonable (between 0.5 and 2.0)
     const aspectScore = aspectRatio >= 0.5 && aspectRatio <= 2.0 ? 1 : 0.5;
 
     // Check corner stability
@@ -221,7 +307,7 @@ export class DocumentDetectionService {
       stabilityScore = cornerDistance < 10 ? 1 : Math.max(0, 1 - cornerDistance / 50);
     }
 
-    // Check if corners form a reasonable rectangle (angles should be ~90 degrees)
+    // Check angles
     const angle1 = Math.abs(
       Math.atan2(corners.topRight.y - corners.topLeft.y, corners.topRight.x - corners.topLeft.x) -
       Math.atan2(corners.bottomLeft.y - corners.topLeft.y, corners.bottomLeft.x - corners.topLeft.x)
@@ -242,7 +328,7 @@ export class DocumentDetectionService {
       return false;
     }
 
-    const threshold = 15; // pixels
+    const threshold = 15;
     const distance = Math.sqrt(
       Math.pow(corners.topLeft.x - this.lastCorners.topLeft.x, 2) +
       Math.pow(corners.topLeft.y - this.lastCorners.topLeft.y, 2) +
@@ -273,7 +359,6 @@ export class DocumentDetectionService {
     ctx.clearRect(0, 0, width, height);
 
     if (corners) {
-      // Draw document edges
       ctx.strokeStyle = quality > 0.7 ? '#22c55e' : quality > 0.4 ? '#f59e0b' : '#ef4444';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -284,7 +369,6 @@ export class DocumentDetectionService {
       ctx.closePath();
       ctx.stroke();
 
-      // Draw corner points
       const cornerColor = quality > 0.7 ? '#22c55e' : '#f59e0b';
       ctx.fillStyle = cornerColor;
       [corners.topLeft, corners.topRight, corners.bottomRight, corners.bottomLeft].forEach(point => {
@@ -293,7 +377,6 @@ export class DocumentDetectionService {
         ctx.fill();
       });
 
-      // Draw quality indicator
       if (quality > 0.7) {
         ctx.fillStyle = 'rgba(34, 197, 94, 0.2)';
         ctx.fill();
@@ -301,9 +384,7 @@ export class DocumentDetectionService {
     }
   }
 
-  private async correctPerspective(corners: DocumentCorners, src: any): Promise<File | null> {
-    if (!this.cv || !this.cvReady) return null;
-
+  private async correctPerspective(corners: DocumentCorners, srcCanvas: HTMLCanvasElement): Promise<File | null> {
     try {
       const width = Math.max(
         Math.sqrt(Math.pow(corners.topRight.x - corners.topLeft.x, 2) + Math.pow(corners.topRight.y - corners.topLeft.y, 2)),
@@ -314,53 +395,92 @@ export class DocumentDetectionService {
         Math.sqrt(Math.pow(corners.bottomRight.x - corners.topRight.x, 2) + Math.pow(corners.bottomRight.y - corners.topRight.y, 2))
       );
 
-      const srcPoints = this.cv.matFromArray(4, 1, this.cv.CV_32FC2, [
+      const dstCanvas = document.createElement('canvas');
+      dstCanvas.width = width;
+      dstCanvas.height = height;
+      const dstCtx = dstCanvas.getContext('2d');
+      if (!dstCtx) return null;
+
+      // Perspective transformation using canvas
+      dstCtx.save();
+      dstCtx.beginPath();
+      dstCtx.moveTo(0, 0);
+      dstCtx.lineTo(width, 0);
+      dstCtx.lineTo(width, height);
+      dstCtx.lineTo(0, height);
+      dstCtx.closePath();
+      dstCtx.clip();
+
+      // Draw with perspective correction
+      const srcPoints = [
         corners.topLeft.x, corners.topLeft.y,
         corners.topRight.x, corners.topRight.y,
         corners.bottomRight.x, corners.bottomRight.y,
         corners.bottomLeft.x, corners.bottomLeft.y
-      ]);
+      ];
+      const dstPoints = [0, 0, width, 0, width, height, 0, height];
 
-      const dstPoints = this.cv.matFromArray(4, 1, this.cv.CV_32FC2, [
-        0, 0,
-        width, 0,
-        width, height,
-        0, height
-      ]);
-
-      const M = this.cv.getPerspectiveTransform(srcPoints, dstPoints);
-      const dst = new this.cv.Mat();
-      this.cv.warpPerspective(src, dst, M, new this.cv.Size(width, height));
-
-      // Convert to image
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      this.cv.imshow(canvas, dst);
+      // Use transform matrix for perspective correction
+      this.drawPerspective(dstCtx, srcCanvas, srcPoints, dstPoints, width, height);
+      
+      dstCtx.restore();
 
       const blob = await new Promise<Blob>((resolve) => {
-        canvas.toBlob((blob: Blob | null) => {
+        dstCanvas.toBlob((blob: Blob | null) => {
           resolve(blob || new Blob());
         }, 'image/jpeg', 0.92);
       });
 
-      const file = new File([blob], 'document_corrected.jpg', { type: 'image/jpeg' });
-
-      // Cleanup
-      srcPoints.delete();
-      dstPoints.delete();
-      M.delete();
-      dst.delete();
-
-      return file;
+      return new File([blob], 'document_corrected.jpg', { type: 'image/jpeg' });
     } catch (error) {
       console.error('Perspective correction error:', error);
       return null;
     }
   }
 
+  private drawPerspective(ctx: CanvasRenderingContext2D, src: HTMLCanvasElement, srcPoints: number[], dstPoints: number[], width: number, height: number) {
+    // Simplified perspective correction using canvas transform
+    // For better quality, consider using a WebGL-based solution or a library
+    const srcX0 = srcPoints[0], srcY0 = srcPoints[1];
+    const srcX1 = srcPoints[2], srcY1 = srcPoints[3];
+    const srcX2 = srcPoints[4], srcY2 = srcPoints[5];
+    const srcX3 = srcPoints[6], srcY3 = srcPoints[7];
+    
+    // Use a simpler approach: draw the cropped region
+    // This is faster but less accurate than full perspective transform
+    ctx.save();
+    
+    // Create clipping path
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(width, 0);
+    ctx.lineTo(width, height);
+    ctx.lineTo(0, height);
+    ctx.closePath();
+    ctx.clip();
+    
+    // For now, use a simplified approach - just crop the detected region
+    // In production, you might want to use a proper perspective transform library
+    const minX = Math.min(srcX0, srcX1, srcX2, srcX3);
+    const maxX = Math.max(srcX0, srcX1, srcX2, srcX3);
+    const minY = Math.min(srcY0, srcY1, srcY2, srcY3);
+    const maxY = Math.max(srcY0, srcY1, srcY2, srcY3);
+    
+    const cropWidth = maxX - minX;
+    const cropHeight = maxY - minY;
+    
+    // Draw the cropped region scaled to destination size
+    ctx.drawImage(
+      src,
+      minX, minY, cropWidth, cropHeight,
+      0, 0, width, height
+    );
+    
+    ctx.restore();
+  }
+
   async processFrame(): Promise<void> {
-    if (this.cancelled || !this.cvReady || !this.cv) return;
+    if (this.cancelled) return;
     
     const video = this.videoRef.current;
     const canvas = this.canvasRef.current;
@@ -369,7 +489,6 @@ export class DocumentDetectionService {
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return;
 
     try {
-      // Sync canvas size with video
       const videoWidth = video.videoWidth;
       const videoHeight = video.videoHeight;
       
@@ -383,29 +502,20 @@ export class DocumentDetectionService {
         this.overlayCanvasRef.current.height = videoHeight;
       }
 
-      // Draw video frame to canvas
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
-      // Convert to OpenCV Mat
-      const src = this.cv.imread(canvas);
-      const gray = new this.cv.Mat();
-      this.cv.cvtColor(src, gray, this.cv.COLOR_RGBA2GRAY);
-
-      // Apply Gaussian blur
-      const blurred = new this.cv.Mat();
-      this.cv.GaussianBlur(gray, blurred, new this.cv.Size(5, 5), 0);
-
-      // Canny edge detection
-      const edges = new this.cv.Mat();
-      this.cv.Canny(blurred, edges, 50, 150);
-
+      // Get image data
+      const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
+      
+      // Detect edges
+      const edgesData = this.detectEdges(imageData);
+      const edgesImageData = new ImageData(edgesData, videoWidth, videoHeight);
+      
       // Find document contour
-      const contour = this.findDocumentContour(edges);
-      const corners = contour ? this.orderPoints(contour) : null;
+      const corners = this.findDocumentContour(edgesImageData);
 
-      // Calculate quality and stability
       let quality = 0;
       let stable = false;
       
@@ -413,7 +523,6 @@ export class DocumentDetectionService {
         quality = this.calculateQuality(corners, videoWidth, videoHeight);
         stable = this.isStable(corners);
         
-        // Add to history
         this.cornerHistory.push(corners);
         if (this.cornerHistory.length > this.maxHistory) {
           this.cornerHistory.shift();
@@ -423,10 +532,8 @@ export class DocumentDetectionService {
         this.cornerHistory = [];
       }
 
-      // Draw overlay
       this.drawOverlay(corners, quality);
 
-      // Notify about detection
       if (this.callbacks.onDetection) {
         this.callbacks.onDetection({
           detected: corners !== null,
@@ -436,32 +543,21 @@ export class DocumentDetectionService {
         });
       }
 
-      // Auto-capture if stable and high quality
       if (corners && stable && quality > 0.7 && this.callbacks.onAutoCapture) {
-        const correctedFile = await this.correctPerspective(corners, src);
+        const correctedFile = await this.correctPerspective(corners, canvas);
         if (correctedFile) {
           this.callbacks.onAutoCapture(correctedFile);
-          // Reset after capture
           this.stableFrames = 0;
           this.cornerHistory = [];
           this.lastCorners = null;
         }
       }
-
-      // Cleanup
-      src.delete();
-      gray.delete();
-      blurred.delete();
-      edges.delete();
-      if (contour) contour.delete();
     } catch (error) {
       console.error('Frame processing error:', error);
     }
   }
 
   async start(): Promise<void> {
-    await this.loadOpenCV();
-    
     const tick = () => {
       if (this.cancelled) return;
       this.processFrame();

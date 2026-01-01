@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { DocumentDetectionService } from '../../../services/documentDetectionService';
+import { SimpleDocumentDetectionService } from '../../../services/simpleDocumentDetectionService';
 import type { DocumentType } from '../types';
 import type { DocumentUploadCallbacks } from '../types';
 import type { DocumentUploadState } from '../types';
@@ -20,7 +20,7 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
   const docStreamRef = useRef<MediaStream | null>(null);
   const docPendingBlobRef = useRef<Blob | null>(null);
   const processingRef = useRef<number | null>(null);
-  const detectionServiceRef = useRef<DocumentDetectionService | null>(null);
+  const detectionServiceRef = useRef<SimpleDocumentDetectionService | null>(null);
 
   const getRearStream = async (): Promise<MediaStream> => {
     const attempts: MediaStreamConstraints[] = [
@@ -183,7 +183,7 @@ export function useDocumentUpload(callbacks?: DocumentUploadCallbacks) {
           
           // Initialize detection service
           if (docVideoRef.current && docCanvasRef.current && docOverlayCanvasRef.current) {
-            const service = new DocumentDetectionService(
+            const service = new SimpleDocumentDetectionService(
               docVideoRef,
               docCanvasRef,
               docOverlayCanvasRef,
