@@ -274,8 +274,11 @@ export class SimpleDocumentDetectionService {
   }
 
   private calculateQuality(corners: DocumentCorners, width: number, height: number): number {
-    // Check if corners are within frame bounds (more lenient margin)
-    const margin = 10; // Reduced from 20
+    // Base score just for detecting a document
+    let baseScore = 0.6;
+    
+    // Check if corners are within frame bounds (very lenient)
+    const margin = 5;
     const inBounds = 
       corners.topLeft.x > margin && corners.topLeft.y > margin &&
       corners.topRight.x < width - margin && corners.topRight.y > margin &&
@@ -283,18 +286,17 @@ export class SimpleDocumentDetectionService {
       corners.bottomLeft.x > margin && corners.bottomLeft.y < height - margin;
 
     if (!inBounds) {
-      // Give partial score if close to bounds
+      // Check if at least all corners are in frame
       const allInBounds = 
         corners.topLeft.x > 0 && corners.topLeft.y > 0 &&
         corners.topRight.x < width && corners.topRight.y > 0 &&
         corners.bottomRight.x < width && corners.bottomRight.y < height &&
         corners.bottomLeft.x > 0 && corners.bottomLeft.y < height;
-      if (!allInBounds) return 0;
-      // If all corners are in frame but close to edge, give partial score
-      return 0.4;
+      if (!allInBounds) return 0.3; // Still give some score if detected
+      baseScore = 0.5; // Slightly lower if close to edge
     }
 
-    // Calculate aspect ratio
+    // Calculate aspect ratio (simplified)
     const width1 = Math.sqrt(
       Math.pow(corners.topRight.x - corners.topLeft.x, 2) +
       Math.pow(corners.topRight.y - corners.topLeft.y, 2)
@@ -316,25 +318,17 @@ export class SimpleDocumentDetectionService {
     const avgHeight = (height1 + height2) / 2;
     const aspectRatio = avgWidth / avgHeight;
 
-    // More lenient aspect ratio check
-    const aspectScore = aspectRatio >= 0.4 && aspectRatio <= 2.5 ? 1 : 
-                       aspectRatio >= 0.3 && aspectRatio <= 3.0 ? 0.8 : 0.6;
+    // Very lenient aspect ratio - accept almost any ratio
+    const aspectScore = aspectRatio >= 0.2 && aspectRatio <= 5.0 ? 1 : 0.8;
 
-    // Check corner stability (more lenient)
-    let stabilityScore = 1;
-    if (this.cornerHistory.length > 0) {
-      const lastCorners = this.cornerHistory[this.cornerHistory.length - 1];
-      const cornerDistance = Math.sqrt(
-        Math.pow(corners.topLeft.x - lastCorners.topLeft.x, 2) +
-        Math.pow(corners.topLeft.y - lastCorners.topLeft.y, 2) +
-        Math.pow(corners.topRight.x - lastCorners.topRight.x, 2) +
-        Math.pow(corners.topRight.y - lastCorners.topRight.y, 2)
-      );
-      // More lenient: accept up to 30px movement
-      stabilityScore = cornerDistance < 30 ? 1 : Math.max(0.5, 1 - cornerDistance / 100);
-    }
+    // Check if document is reasonably sized (not too small, not too large)
+    const docArea = avgWidth * avgHeight;
+    const frameArea = width * height;
+    const areaRatio = docArea / frameArea;
+    const areaScore = areaRatio > 0.1 && areaRatio < 0.95 ? 1 : 
+                     areaRatio > 0.05 && areaRatio < 0.98 ? 0.9 : 0.7;
 
-    // Check angles (more lenient)
+    // Simple angle check - just ensure it's roughly rectangular
     const angle1 = Math.abs(
       Math.atan2(corners.topRight.y - corners.topLeft.y, corners.topRight.x - corners.topLeft.x) -
       Math.atan2(corners.bottomLeft.y - corners.topLeft.y, corners.bottomLeft.x - corners.topLeft.x)
@@ -343,29 +337,22 @@ export class SimpleDocumentDetectionService {
       Math.atan2(corners.bottomRight.y - corners.topRight.y, corners.bottomRight.x - corners.topRight.x) -
       Math.atan2(corners.topRight.y - corners.topLeft.y, corners.topRight.x - corners.topLeft.x)
     );
-    // More lenient angle check
-    const angleScore = (Math.abs(angle1 - Math.PI / 2) < 0.5 && Math.abs(angle2 - Math.PI / 2) < 0.5) ? 1 : 
-                      (Math.abs(angle1 - Math.PI / 2) < 0.7 && Math.abs(angle2 - Math.PI / 2) < 0.7) ? 0.8 : 0.6;
+    // Very lenient - accept angles between 30 and 150 degrees
+    const angleScore = (Math.abs(angle1 - Math.PI / 2) < 1.0 && Math.abs(angle2 - Math.PI / 2) < 1.0) ? 1 : 0.8;
 
-    // Weighted average - give more weight to aspect ratio and angles
-    const finalScore = (aspectScore * 0.4 + stabilityScore * 0.2 + angleScore * 0.4);
+    // Simple weighted average - prioritize base score and area
+    const finalScore = baseScore * 0.5 + aspectScore * 0.2 + angleScore * 0.15 + areaScore * 0.15;
     
-    // Boost score if document is reasonably sized
-    const docArea = avgWidth * avgHeight;
-    const frameArea = width * height;
-    const areaRatio = docArea / frameArea;
-    const areaScore = areaRatio > 0.15 && areaRatio < 0.9 ? 1 : 
-                     areaRatio > 0.1 && areaRatio < 0.95 ? 0.9 : 0.7;
-    
-    return Math.min(1, finalScore * 0.8 + areaScore * 0.2);
+    // Ensure minimum score if document is detected
+    return Math.max(0.5, Math.min(1, finalScore));
   }
 
   private isStable(corners: DocumentCorners, quality: number): boolean {
-    // Simple approach: if we have good quality detection, count frames
-    // Don't require perfect stability, just consistent detection
+    // Very lenient: if document is detected (quality > 0.3), count frames
+    // This ensures we capture even if quality calculation is conservative
     
-    if (quality > 0.5) {
-      // Document is detected with reasonable quality
+    if (quality > 0.3) {
+      // Document is detected - count frames
       this.consecutiveGoodFrames++;
       this.stableFrames = this.consecutiveGoodFrames;
       
@@ -373,33 +360,20 @@ export class SimpleDocumentDetectionService {
       if (!this.lastCorners) {
         this.lastCorners = corners;
       } else {
-        // Only update if movement is reasonable (for smoothing)
-        const avgMovement = (
-          Math.abs(corners.topLeft.x - this.lastCorners.topLeft.x) +
-          Math.abs(corners.topLeft.y - this.lastCorners.topLeft.y) +
-          Math.abs(corners.topRight.x - this.lastCorners.topRight.x) +
-          Math.abs(corners.topRight.y - this.lastCorners.topRight.y) +
-          Math.abs(corners.bottomRight.x - this.lastCorners.bottomRight.x) +
-          Math.abs(corners.bottomRight.y - this.lastCorners.bottomRight.y) +
-          Math.abs(corners.bottomLeft.x - this.lastCorners.bottomLeft.x) +
-          Math.abs(corners.bottomLeft.y - this.lastCorners.bottomLeft.y)
-        ) / 8;
-        
-        // Update last corners if movement is small (stable) or if it's been a while
-        if (avgMovement < 30 || this.consecutiveGoodFrames > 5) {
+        // Update last corners periodically for smoothing
+        if (this.consecutiveGoodFrames % 3 === 0) {
           this.lastCorners = corners;
         }
       }
     } else {
-      // Quality dropped, reset counters
-      this.consecutiveGoodFrames = 0;
-      this.stableFrames = 0;
-      this.lastCorners = null;
+      // Quality too low, reset counters gradually
+      this.consecutiveGoodFrames = Math.max(0, this.consecutiveGoodFrames - 1);
+      this.stableFrames = this.consecutiveGoodFrames;
     }
 
-    // Consider stable if we have enough consecutive good frames
-    // Lower threshold for quality > 0.6
-    const requiredFrames = quality > 0.65 ? 6 : this.requiredStableFrames;
+    // Very lenient: only need 5-6 frames for capture
+    // If quality is decent (>0.5), only need 4 frames
+    const requiredFrames = quality > 0.5 ? 4 : 6;
     return this.stableFrames >= requiredFrames;
   }
 
@@ -680,10 +654,10 @@ export class SimpleDocumentDetectionService {
       }
 
       // Auto-capture when conditions are met
-      // More lenient: just need good quality and stable frames
+      // Very lenient: if document is detected and stable for a few frames, capture it
       const shouldCapture = scaledCorners && 
-                           quality > 0.55 && 
-                           this.stableFrames >= 6 && 
+                           quality > 0.4 && 
+                           this.stableFrames >= 5 && 
                            !this.captureTriggered && 
                            this.callbacks.onAutoCapture;
       
@@ -722,14 +696,15 @@ export class SimpleDocumentDetectionService {
         }
       } else if (scaledCorners && !this.captureTriggered) {
         // Debug info every few frames
-        if (this.frameSkip === 0 && this.stableFrames % 5 === 0) {
+        if (this.frameSkip === 0 && this.stableFrames % 3 === 0) {
           console.log('Detection status:', {
             quality: quality.toFixed(2),
             stable,
             frames: this.stableFrames,
             consecutiveGood: this.consecutiveGoodFrames,
-            required: 6,
-            willCapture: quality > 0.55 && this.stableFrames >= 6
+            required: quality > 0.5 ? 4 : 6,
+            willCapture: quality > 0.4 && this.stableFrames >= 5,
+            corners: scaledCorners ? 'detected' : 'none'
           });
         }
       }
