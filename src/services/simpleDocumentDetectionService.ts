@@ -27,10 +27,14 @@ export class SimpleDocumentDetectionService {
   
   // Detection state
   private stableFrames = 0;
-  private requiredStableFrames = 15; // ~0.5 seconds at 30fps
+  private requiredStableFrames = 10; // Reduced for faster capture
   private lastCorners: DocumentCorners | null = null;
   private cornerHistory: DocumentCorners[] = [];
-  private readonly maxHistory = 10;
+  private readonly maxHistory = 5;
+  private frameSkip = 0;
+  private readonly frameSkipCount = 2; // Process every 3rd frame
+  private captureTriggered = false; // Prevent multiple captures
+  private smoothedCorners: DocumentCorners | null = null;
 
   constructor(
     videoRef: React.RefObject<HTMLVideoElement | null>,
@@ -46,41 +50,44 @@ export class SimpleDocumentDetectionService {
     this.callbacks = callbacks;
   }
 
-  private detectEdges(imageData: ImageData): Uint8ClampedArray {
+  private detectEdges(imageData: ImageData, scale: number = 1): Uint8ClampedArray {
     const data = imageData.data;
     const width = imageData.width;
     const height = imageData.height;
     const edges = new Uint8ClampedArray(data.length);
     
-    // Convert to grayscale first
+    // Optimized grayscale conversion
     const gray = new Uint8ClampedArray(width * height);
     for (let i = 0; i < data.length; i += 4) {
-      const grayValue = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      gray[i / 4] = grayValue;
+      gray[i / 4] = (data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114) | 0;
     }
     
-    // Sobel edge detection
-    const sobelX = [-1, 0, 1, -2, 0, 2, -1, 0, 1];
-    const sobelY = [-1, -2, -1, 0, 0, 0, 1, 2, 1];
+    // Optimized Sobel with step for performance
+    const step = Math.max(1, Math.floor(scale));
+    const threshold = 40;
     
-    for (let y = 1; y < height - 1; y++) {
-      for (let x = 1; x < width - 1; x++) {
-        let gx = 0, gy = 0;
-        for (let ky = -1; ky <= 1; ky++) {
-          for (let kx = -1; kx <= 1; kx++) {
-            const idx = (y + ky) * width + (x + kx);
-            const kernelIdx = (ky + 1) * 3 + (kx + 1);
-            gx += gray[idx] * sobelX[kernelIdx];
-            gy += gray[idx] * sobelY[kernelIdx];
-          }
-        }
-        const magnitude = Math.sqrt(gx * gx + gy * gy);
-        const idx = (y * width + x) * 4;
-        const edgeValue = magnitude > 50 ? 255 : 0; // Threshold
-        edges[idx] = edgeValue;
-        edges[idx + 1] = edgeValue;
-        edges[idx + 2] = edgeValue;
-        edges[idx + 3] = 255;
+    for (let y = 1; y < height - 1; y += step) {
+      for (let x = 1; x < width - 1; x += step) {
+        const idx = y * width + x;
+        
+        // Fast Sobel approximation
+        const gx = 
+          -gray[(y - 1) * width + (x - 1)] + gray[(y - 1) * width + (x + 1)]
+          - 2 * gray[y * width + (x - 1)] + 2 * gray[y * width + (x + 1)]
+          -gray[(y + 1) * width + (x - 1)] + gray[(y + 1) * width + (x + 1)];
+        
+        const gy = 
+          -gray[(y - 1) * width + (x - 1)] - 2 * gray[(y - 1) * width + x] - gray[(y - 1) * width + (x + 1)]
+          +gray[(y + 1) * width + (x - 1)] + 2 * gray[(y + 1) * width + x] + gray[(y + 1) * width + (x + 1)];
+        
+        const magnitude = Math.abs(gx) + Math.abs(gy); // Faster than sqrt
+        const edgeValue = magnitude > threshold ? 255 : 0;
+        const pixelIdx = (y * width + x) * 4;
+        
+        edges[pixelIdx] = edgeValue;
+        edges[pixelIdx + 1] = edgeValue;
+        edges[pixelIdx + 2] = edgeValue;
+        edges[pixelIdx + 3] = 255;
       }
     }
     
@@ -91,45 +98,49 @@ export class SimpleDocumentDetectionService {
     const width = edges.width;
     const height = edges.height;
     const data = edges.data;
-    const visited = new Set<string>();
+    const visited = new Uint8Array(width * height);
     const contours: Array<Array<{ x: number; y: number }>> = [];
     
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
+    // Sample every nth pixel for performance
+    const step = 2;
+    
+    for (let y = 0; y < height; y += step) {
+      for (let x = 0; x < width; x += step) {
         const idx = (y * width + x) * 4;
-        const key = `${x},${y}`;
+        const visitIdx = y * width + x;
         
-        if (data[idx] > 128 && !visited.has(key)) {
+        if (data[idx] > 128 && !visited[visitIdx]) {
           const contour: Array<{ x: number; y: number }> = [];
           const stack: Array<{ x: number; y: number }> = [{ x, y }];
           
-          while (stack.length > 0) {
+          while (stack.length > 0 && contour.length < 5000) { // Limit contour size
             const point = stack.pop()!;
-            const pointKey = `${point.x},${point.y}`;
+            const pointVisitIdx = point.y * width + point.x;
             
-            if (visited.has(pointKey)) continue;
-            visited.add(pointKey);
+            if (visited[pointVisitIdx]) continue;
+            visited[pointVisitIdx] = 1;
             contour.push(point);
             
-            // Check 8 neighbors
-            for (let dy = -1; dy <= 1; dy++) {
-              for (let dx = -1; dx <= 1; dx++) {
-                if (dx === 0 && dy === 0) continue;
-                const nx = point.x + dx;
-                const ny = point.y + dy;
-                
-                if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
-                  const nIdx = (ny * width + nx) * 4;
-                  const nKey = `${nx},${ny}`;
-                  if (data[nIdx] > 128 && !visited.has(nKey)) {
-                    stack.push({ x: nx, y: ny });
-                  }
+            // Check 4 neighbors only (faster)
+            const neighbors = [
+              { x: point.x + step, y: point.y },
+              { x: point.x - step, y: point.y },
+              { x: point.x, y: point.y + step },
+              { x: point.x, y: point.y - step }
+            ];
+            
+            for (const neighbor of neighbors) {
+              if (neighbor.x >= 0 && neighbor.x < width && neighbor.y >= 0 && neighbor.y < height) {
+                const nIdx = (neighbor.y * width + neighbor.x) * 4;
+                const nVisitIdx = neighbor.y * width + neighbor.x;
+                if (data[nIdx] > 128 && !visited[nVisitIdx]) {
+                  stack.push(neighbor);
                 }
               }
             }
           }
           
-          if (contour.length > 100) { // Minimum contour size
+          if (contour.length > 50) { // Minimum contour size
             contours.push(contour);
           }
         }
@@ -206,7 +217,9 @@ export class SimpleDocumentDetectionService {
     
     for (const contour of contours) {
       const area = this.calculateContourArea(contour);
-      if (area > maxArea && area > 10000) { // Minimum area threshold
+      // Adjusted minimum area - scale with image size
+      const minArea = (edges.width * edges.height) * 0.05; // 5% of image area
+      if (area > maxArea && area > minArea) {
         maxArea = area;
         largestContour = contour;
       }
@@ -328,22 +341,64 @@ export class SimpleDocumentDetectionService {
       return false;
     }
 
-    const threshold = 15;
-    const distance = Math.sqrt(
-      Math.pow(corners.topLeft.x - this.lastCorners.topLeft.x, 2) +
-      Math.pow(corners.topLeft.y - this.lastCorners.topLeft.y, 2) +
-      Math.pow(corners.topRight.x - this.lastCorners.topRight.x, 2) +
-      Math.pow(corners.topRight.y - this.lastCorners.topRight.y, 2)
-    );
+    // Calculate average corner movement
+    const avgMovement = (
+      Math.abs(corners.topLeft.x - this.lastCorners.topLeft.x) +
+      Math.abs(corners.topLeft.y - this.lastCorners.topLeft.y) +
+      Math.abs(corners.topRight.x - this.lastCorners.topRight.x) +
+      Math.abs(corners.topRight.y - this.lastCorners.topRight.y) +
+      Math.abs(corners.bottomRight.x - this.lastCorners.bottomRight.x) +
+      Math.abs(corners.bottomRight.y - this.lastCorners.bottomRight.y) +
+      Math.abs(corners.bottomLeft.x - this.lastCorners.bottomLeft.x) +
+      Math.abs(corners.bottomLeft.y - this.lastCorners.bottomLeft.y)
+    ) / 8;
 
-    if (distance < threshold) {
+    const threshold = 20; // pixels
+    if (avgMovement < threshold) {
       this.stableFrames++;
     } else {
-      this.stableFrames = 0;
+      this.stableFrames = Math.max(0, this.stableFrames - 1); // Gradual decrease
       this.lastCorners = corners;
     }
 
     return this.stableFrames >= this.requiredStableFrames;
+  }
+
+  private smoothCorners(newCorners: DocumentCorners | null): DocumentCorners | null {
+    if (!newCorners) {
+      this.smoothedCorners = null;
+      return null;
+    }
+
+    if (!this.smoothedCorners) {
+      this.smoothedCorners = newCorners;
+      return newCorners;
+    }
+
+    // Smooth with exponential moving average
+    const alpha = 0.3; // Smoothing factor
+    const smooth = (old: number, newVal: number) => old * (1 - alpha) + newVal * alpha;
+
+    this.smoothedCorners = {
+      topLeft: {
+        x: smooth(this.smoothedCorners.topLeft.x, newCorners.topLeft.x),
+        y: smooth(this.smoothedCorners.topLeft.y, newCorners.topLeft.y)
+      },
+      topRight: {
+        x: smooth(this.smoothedCorners.topRight.x, newCorners.topRight.x),
+        y: smooth(this.smoothedCorners.topRight.y, newCorners.topRight.y)
+      },
+      bottomRight: {
+        x: smooth(this.smoothedCorners.bottomRight.x, newCorners.bottomRight.x),
+        y: smooth(this.smoothedCorners.bottomRight.y, newCorners.bottomRight.y)
+      },
+      bottomLeft: {
+        x: smooth(this.smoothedCorners.bottomLeft.x, newCorners.bottomLeft.x),
+        y: smooth(this.smoothedCorners.bottomLeft.y, newCorners.bottomLeft.y)
+      }
+    };
+
+    return this.smoothedCorners;
   }
 
   private drawOverlay(corners: DocumentCorners | null, quality: number) {
@@ -358,20 +413,23 @@ export class SimpleDocumentDetectionService {
 
     ctx.clearRect(0, 0, width, height);
 
-    if (corners) {
+    // Use smoothed corners for display
+    const displayCorners = this.smoothCorners(corners);
+
+    if (displayCorners) {
       ctx.strokeStyle = quality > 0.7 ? '#22c55e' : quality > 0.4 ? '#f59e0b' : '#ef4444';
       ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.moveTo(corners.topLeft.x, corners.topLeft.y);
-      ctx.lineTo(corners.topRight.x, corners.topRight.y);
-      ctx.lineTo(corners.bottomRight.x, corners.bottomRight.y);
-      ctx.lineTo(corners.bottomLeft.x, corners.bottomLeft.y);
+      ctx.moveTo(displayCorners.topLeft.x, displayCorners.topLeft.y);
+      ctx.lineTo(displayCorners.topRight.x, displayCorners.topRight.y);
+      ctx.lineTo(displayCorners.bottomRight.x, displayCorners.bottomRight.y);
+      ctx.lineTo(displayCorners.bottomLeft.x, displayCorners.bottomLeft.y);
       ctx.closePath();
       ctx.stroke();
 
       const cornerColor = quality > 0.7 ? '#22c55e' : '#f59e0b';
       ctx.fillStyle = cornerColor;
-      [corners.topLeft, corners.topRight, corners.bottomRight, corners.bottomLeft].forEach(point => {
+      [displayCorners.topLeft, displayCorners.topRight, displayCorners.bottomRight, displayCorners.bottomLeft].forEach(point => {
         ctx.beginPath();
         ctx.arc(point.x, point.y, 8, 0, Math.PI * 2);
         ctx.fill();
@@ -480,7 +538,21 @@ export class SimpleDocumentDetectionService {
   }
 
   async processFrame(): Promise<void> {
-    if (this.cancelled) return;
+    if (this.cancelled || this.captureTriggered) return;
+    
+    // Skip frames for performance
+    this.frameSkip++;
+    if (this.frameSkip < this.frameSkipCount) {
+      // Still draw overlay even if skipping detection
+      if (this.smoothedCorners) {
+        const quality = this.calculateQuality(this.smoothedCorners, 
+          this.overlayCanvasRef.current?.width || 0,
+          this.overlayCanvasRef.current?.height || 0);
+        this.drawOverlay(this.smoothedCorners, quality);
+      }
+      return;
+    }
+    this.frameSkip = 0;
     
     const video = this.videoRef.current;
     const canvas = this.canvasRef.current;
@@ -506,24 +578,46 @@ export class SimpleDocumentDetectionService {
       if (!ctx) return;
       ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
 
-      // Get image data
-      const imageData = ctx.getImageData(0, 0, videoWidth, videoHeight);
+      // Process at lower resolution for performance
+      const scale = 0.5; // Process at half resolution
+      const processWidth = Math.floor(videoWidth * scale);
+      const processHeight = Math.floor(videoHeight * scale);
+      
+      // Create a temporary canvas for processing
+      const processCanvas = document.createElement('canvas');
+      processCanvas.width = processWidth;
+      processCanvas.height = processHeight;
+      const processCtx = processCanvas.getContext('2d');
+      if (!processCtx) return;
+      
+      processCtx.drawImage(canvas, 0, 0, videoWidth, videoHeight, 0, 0, processWidth, processHeight);
+      
+      // Get image data at lower resolution
+      const imageData = processCtx.getImageData(0, 0, processWidth, processHeight);
       
       // Detect edges
-      const edgesData = this.detectEdges(imageData);
-      const edgesImageData = new ImageData(edgesData, videoWidth, videoHeight);
+      const edgesData = this.detectEdges(imageData, scale);
+      const edgesImageData = new ImageData(edgesData, processWidth, processHeight);
       
       // Find document contour
       const corners = this.findDocumentContour(edgesImageData);
+      
+      // Scale corners back to original resolution
+      const scaledCorners = corners ? {
+        topLeft: { x: corners.topLeft.x / scale, y: corners.topLeft.y / scale },
+        topRight: { x: corners.topRight.x / scale, y: corners.topRight.y / scale },
+        bottomRight: { x: corners.bottomRight.x / scale, y: corners.bottomRight.y / scale },
+        bottomLeft: { x: corners.bottomLeft.x / scale, y: corners.bottomLeft.y / scale }
+      } : null;
 
       let quality = 0;
       let stable = false;
       
-      if (corners) {
-        quality = this.calculateQuality(corners, videoWidth, videoHeight);
-        stable = this.isStable(corners);
+      if (scaledCorners) {
+        quality = this.calculateQuality(scaledCorners, videoWidth, videoHeight);
+        stable = this.isStable(scaledCorners);
         
-        this.cornerHistory.push(corners);
+        this.cornerHistory.push(scaledCorners);
         if (this.cornerHistory.length > this.maxHistory) {
           this.cornerHistory.shift();
         }
@@ -532,28 +626,63 @@ export class SimpleDocumentDetectionService {
         this.cornerHistory = [];
       }
 
-      this.drawOverlay(corners, quality);
+      this.drawOverlay(scaledCorners, quality);
 
       if (this.callbacks.onDetection) {
         this.callbacks.onDetection({
-          detected: corners !== null,
-          corners,
+          detected: scaledCorners !== null,
+          corners: scaledCorners,
           quality,
           stable
         });
       }
 
-      if (corners && stable && quality > 0.7 && this.callbacks.onAutoCapture) {
-        const correctedFile = await this.correctPerspective(corners, canvas);
-        if (correctedFile) {
-          this.callbacks.onAutoCapture(correctedFile);
-          this.stableFrames = 0;
-          this.cornerHistory = [];
-          this.lastCorners = null;
+      // Auto-capture when conditions are met
+      if (scaledCorners && stable && quality > 0.6 && !this.captureTriggered && this.callbacks.onAutoCapture) {
+        this.captureTriggered = true; // Prevent multiple captures
+        console.log('Auto-capturing document...', { 
+          quality: quality.toFixed(2), 
+          stable, 
+          frames: this.stableFrames,
+          corners: scaledCorners 
+        });
+        
+        // Use original resolution canvas for capture
+        try {
+          const correctedFile = await this.correctPerspective(scaledCorners, canvas);
+          if (correctedFile) {
+            console.log('Document captured successfully');
+            this.callbacks.onAutoCapture(correctedFile);
+            // Reset after a delay to allow for another capture if needed
+            setTimeout(() => {
+              this.captureTriggered = false;
+              this.stableFrames = 0;
+              this.cornerHistory = [];
+              this.lastCorners = null;
+              this.smoothedCorners = null;
+            }, 3000);
+          } else {
+            console.warn('Failed to create corrected file');
+            this.captureTriggered = false;
+          }
+        } catch (error) {
+          console.error('Error during capture:', error);
+          this.captureTriggered = false;
+        }
+      } else if (scaledCorners && !this.captureTriggered) {
+        // Debug info
+        if (this.frameSkip === 0 && this.stableFrames % 10 === 0) {
+          console.log('Detection status:', {
+            quality: quality.toFixed(2),
+            stable,
+            frames: this.stableFrames,
+            required: this.requiredStableFrames
+          });
         }
       }
     } catch (error) {
       console.error('Frame processing error:', error);
+      this.captureTriggered = false;
     }
   }
 
@@ -578,6 +707,9 @@ export class SimpleDocumentDetectionService {
     this.stableFrames = 0;
     this.cornerHistory = [];
     this.lastCorners = null;
+    this.smoothedCorners = null;
+    this.captureTriggered = false;
+    this.frameSkip = 0;
   }
 }
 
