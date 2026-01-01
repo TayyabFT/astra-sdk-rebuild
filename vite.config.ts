@@ -43,5 +43,17 @@ export default defineConfig(({ command, mode }) => {
   // Development and app build configuration
   return {
     plugins: [react()],
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks: undefined,
+        },
+      },
+    },
+    // Ensure proper base path for deployment
+    base: '/',
   };
 })
