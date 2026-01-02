@@ -1,32 +1,33 @@
 import { useState, useEffect } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
 import '../index.css';
 
 interface QRCodePageProps {
   onClose?: () => void;
+  onNavigate?: (view: 'qr' | 'mobileroute') => void;
+  mobileBaseUrl?: string;
+  sessionId?: string;
 }
 
-function QRCodePage({ onClose }: QRCodePageProps = {}) {
-  const [searchParams] = useSearchParams();
-  const navigate = useNavigate();
+function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-rebuild.vercel.app', sessionId }: QRCodePageProps = {}) {
   const [qrUrl, setQrUrl] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
 
   useEffect(() => {
-    const currentUrl = window.location.origin;
-
-    const params: Record<string, string> = {};
-    searchParams.forEach((value, key) => {
-      params[key] = value;
-    });
-
+    // Get search params from current URL
+    const searchParams = new URLSearchParams(window.location.search);
+    
+    // Add sessionId to query params if provided
+    if (sessionId) {
+      searchParams.set('sessionId', sessionId);
+    }
+    
     const mobileRoute = '/mobileroute';
-    const queryString = new URLSearchParams(params).toString();
-    const fullUrl = `${currentUrl}${mobileRoute}${queryString ? `?${queryString}` : ''}`;
+    const queryString = searchParams.toString();
+    const fullUrl = `${mobileBaseUrl}${mobileRoute}${queryString ? `?${queryString}` : ''}`;
     
     setQrUrl(fullUrl);
-  }, [searchParams]);
+  }, [mobileBaseUrl, sessionId]);
 
   const handleCopyUrl = async () => {
     if (qrUrl) {
@@ -43,8 +44,6 @@ function QRCodePage({ onClose }: QRCodePageProps = {}) {
   const handleClose = () => {
     if (onClose) {
       onClose();
-    } else {
-      navigate(-1);
     }
   };
 
@@ -53,8 +52,14 @@ function QRCodePage({ onClose }: QRCodePageProps = {}) {
   };
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center bg-black p-4 sm:p-6 md:p-8 z-[1000]">
-      <div className="relative bg-[rgba(20,20,20,0.95)] rounded-2xl p-5 sm:p-6 md:p-7 max-w-[450px] w-full h-[80vh] flex flex-col text-center shadow-[0_8px_32px_rgba(0,0,0,0.5)]">
+    <div className="fixed inset-0 flex items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-black p-4 sm:p-6 md:p-8 z-[1000]">
+      {/* Background pattern overlay */}
+      <div className="absolute inset-0 opacity-10" style={{
+        backgroundImage: `radial-gradient(circle at 2px 2px, rgba(255,255,255,0.15) 1px, transparent 0)`,
+        backgroundSize: '40px 40px'
+      }}></div>
+      
+      <div className="relative bg-[rgba(20,20,20,0.95)] backdrop-blur-sm rounded-2xl p-5 sm:p-6 md:p-7 max-w-[450px] w-full h-[80vh] flex flex-col text-center shadow-[0_8px_32px_rgba(0,0,0,0.5)] border border-white/10">
         <button 
           className="absolute top-5 right-5 bg-transparent border-none text-white cursor-pointer p-2 flex items-center justify-center rounded transition-colors hover:bg-white/10 active:bg-white/20" 
           onClick={handleClose} 

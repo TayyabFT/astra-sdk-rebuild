@@ -1,8 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { KycProvider } from '../contexts/KycContext';
 import MobileRoute from '../pages/MobileRoute';
 import QRCodePage from '../pages/QRCodePage';
-import { MemoryRouter, Routes, Route, Navigate } from 'react-router-dom';
 
 export interface KycFlowProps {
   apiBaseUrl: string;
@@ -11,7 +10,10 @@ export interface KycFlowProps {
   deviceType?: string;
   startAtQr?: boolean;
   onClose?: () => void;
+  mobileBaseUrl?: string;
 }
+
+type KycFlowView = 'qr' | 'mobileroute';
 
 export const KycFlow: React.FC<KycFlowProps> = ({
   apiBaseUrl,
@@ -20,7 +22,20 @@ export const KycFlow: React.FC<KycFlowProps> = ({
   deviceType,
   startAtQr = true,
   onClose,
+  mobileBaseUrl = 'https://astra-sdk-rebuild.vercel.app',
 }) => {
+  const [currentView, setCurrentView] = useState<KycFlowView>(startAtQr ? 'qr' : 'mobileroute');
+
+  const handleNavigate = (view: KycFlowView) => {
+    setCurrentView(view);
+  };
+
+  const handleClose = () => {
+    if (onClose) {
+      onClose();
+    }
+  };
+
   return (
     <KycProvider
       apiBaseUrl={apiBaseUrl}
@@ -28,13 +43,16 @@ export const KycFlow: React.FC<KycFlowProps> = ({
       serverKey={serverKey}
       deviceType={deviceType}
     >
-      <MemoryRouter initialEntries={[startAtQr ? '/qr' : '/mobileroute']}>
-        <Routes>
-          <Route path="/" element={<Navigate to={startAtQr ? "/qr" : "/mobileroute"} replace />} />
-          <Route path="/qr" element={<QRCodePage onClose={onClose} />} />
-          <Route path="/mobileroute" element={<MobileRoute onClose={onClose} />} />
-        </Routes>
-      </MemoryRouter>
+      {currentView === 'qr' ? (
+        <QRCodePage 
+          onClose={handleClose} 
+          onNavigate={handleNavigate}
+          mobileBaseUrl={mobileBaseUrl}
+          sessionId={sessionId}
+        />
+      ) : (
+        <MobileRoute onClose={handleClose} onNavigate={handleNavigate} />
+      )}
     </KycProvider>
   );
 };

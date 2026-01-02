@@ -1,28 +1,24 @@
 import { useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { isMobileDevice } from '../utils/deviceDetection';
 import FaceScanModal from './FaceScanModal';
 import '../index.css';
 
 interface MobileRouteProps {
   onClose?: () => void;
+  onNavigate?: (view: 'qr' | 'mobileroute') => void;
 }
 
-function MobileRoute({ onClose }: MobileRouteProps = {}) {
-  const navigate = useNavigate();
-
+function MobileRoute({ onClose, onNavigate }: MobileRouteProps = {}) {
   useEffect(() => {
-    if (!isMobileDevice()) {
-      navigate('/qr', { replace: true });
+    if (!isMobileDevice() && onNavigate) {
+      onNavigate('qr');
       return;
     }
-  }, [navigate]);
+  }, [onNavigate]);
 
   const handleClose = () => {
     if (onClose) {
       onClose();
-    } else {
-      navigate(-1);
     }
   };
 
