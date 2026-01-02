@@ -86,14 +86,14 @@ function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-re
           </p>
           
           {qrUrl && (
-            <div className="flex justify-center items-center p-3 sm:p-4 bg-white rounded-xl border-2 border-white">
+            <div className="flex justify-center items-center p-3 sm:p-4 bg-black rounded-xl border-2 border-white shadow-lg">
               <QRCodeSVG
                 value={qrUrl}
                 size={180}
                 level="H"
                 includeMargin={true}
-                bgColor="transparent"
-                fgColor="#000000"
+                bgColor="#000000"
+                fgColor="#FFFFFF"
               />
             </div>
           )}
