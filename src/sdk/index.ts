@@ -80,5 +80,18 @@ export { AstraSDKError } from './types';
 
 export { ApiClient } from './client';
 
+// Export KYC components
+export { KycFlow } from '../components/KycFlow';
+export type { KycFlowProps } from '../components/KycFlow';
+
+// Export KYC API service
+export { KycApiService } from '../services/kycApiService';
+export type { 
+  KycApiConfig, 
+  SessionStatusResponse, 
+  FaceScanResponse, 
+  DocumentUploadResponse 
+} from '../services/kycApiService';
+
 export default AstraSDK;
 

@@ -66,7 +66,7 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
   // Show session error if present
   if (sessionError) {
     return (
-      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+      <div className="fixed inset-0 bg-black p-4 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
         <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl">
           <div className="text-center">
             <h2 className="m-0 mb-4 text-[26px] font-bold text-red-500">

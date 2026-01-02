@@ -13,7 +13,7 @@ export default defineConfig(({ command, mode }) => {
       plugins: [
         react(),
         dts({
-          include: ['src/sdk/**/*.ts'],
+          include: ['src/sdk/**/*.ts', 'src/components/**/*.tsx', 'src/contexts/**/*.tsx', 'src/services/kycApiService.ts'],
           outDir: 'dist',
           rollupTypes: true,
           tsconfigPath: './tsconfig.sdk.json',
@@ -28,9 +28,13 @@ export default defineConfig(({ command, mode }) => {
           formats: ['es', 'cjs', 'umd'],
         },
         rollupOptions: {
-          external: [],
+          external: ['react', 'react-dom', 'react-router-dom', '@mediapipe/face_mesh', '@mediapipe/camera_utils', '@mediapipe/drawing_utils', 'qrcode.react'],
           output: {
-            globals: {},
+            globals: {
+              'react': 'React',
+              'react-dom': 'ReactDOM',
+              'react-router-dom': 'ReactRouterDOM',
+            },
             exports: 'named',
           },
         },

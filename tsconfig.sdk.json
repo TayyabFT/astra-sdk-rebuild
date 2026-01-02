@@ -6,7 +6,7 @@
     "emitDeclarationOnly": false,
     "noEmit": false
   },
-  "include": ["src/sdk/**/*"],
+  "include": ["src/sdk/**/*", "src/components/**/*", "src/contexts/**/*", "src/services/kycApiService.ts"],
   "exclude": ["node_modules", "dist", "src/**/*.test.ts", "src/**/*.spec.ts", "vite.config.ts", "**/vite.config.ts"]
 }
 
