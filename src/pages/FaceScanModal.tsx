@@ -58,6 +58,36 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
     setState(prev => ({ ...prev, cameraReady }));
   }, [cameraReady, setState]);
 
+  // Log session info and call status API when camera opens
+  useEffect(() => {
+    if (cameraReady && apiService) {
+      // Get config from apiService to log session info
+      const config = apiService.getConfig();
+      if (config) {
+        console.log('=== Camera Opened ===');
+        console.log('Session ID:', config.sessionId);
+        console.log('Server Key:', config.serverKey);
+        console.log('API Base URL:', config.apiBaseUrl);
+        console.log('Device Type:', config.deviceType || 'auto-detected');
+        
+        // Call status API
+        apiService.getSessionStatus()
+          .then((statusResponse) => {
+            console.log('=== Session Status API Response ===');
+            console.log('Full Response:', statusResponse);
+            console.log('Session Status:', statusResponse.data?.status);
+            console.log('Session ID:', statusResponse.data?.session_id);
+            console.log('Completed Steps:', statusResponse.data?.completed_steps);
+            console.log('Next Step:', statusResponse.data?.next_step);
+          })
+          .catch((error) => {
+            console.error('=== Session Status API Error ===');
+            console.error('Error fetching session status:', error);
+          });
+      }
+    }
+  }, [cameraReady, apiService]);
+
   const handleRetry = () => {
     stopCamera();
     setState({

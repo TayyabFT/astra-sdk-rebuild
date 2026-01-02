@@ -7,9 +7,11 @@ interface QRCodePageProps {
   onNavigate?: (view: 'qr' | 'mobileroute') => void;
   mobileBaseUrl?: string;
   sessionId?: string;
+  apiBaseUrl?: string;
+  serverKey?: string;
 }
 
-function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-rebuild.vercel.app', sessionId }: QRCodePageProps = {}) {
+function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-rebuild.vercel.app', sessionId, apiBaseUrl, serverKey }: QRCodePageProps = {}) {
   const [qrUrl, setQrUrl] = useState<string>('');
   const [copied, setCopied] = useState<boolean>(false);
 
@@ -17,9 +19,15 @@ function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-re
     // Get search params from current URL
     const searchParams = new URLSearchParams(window.location.search);
     
-    // Add sessionId to query params if provided
+    // Add required params to query string for mobile route
     if (sessionId) {
       searchParams.set('sessionId', sessionId);
+    }
+    if (apiBaseUrl) {
+      searchParams.set('apiBaseUrl', apiBaseUrl);
+    }
+    if (serverKey) {
+      searchParams.set('serverKey', serverKey);
     }
     
     const mobileRoute = '/mobileroute';
@@ -27,7 +35,7 @@ function QRCodePage({ onClose, onNavigate, mobileBaseUrl = 'https://astra-sdk-re
     const fullUrl = `${mobileBaseUrl}${mobileRoute}${queryString ? `?${queryString}` : ''}`;
     
     setQrUrl(fullUrl);
-  }, [mobileBaseUrl, sessionId]);
+  }, [mobileBaseUrl, sessionId, apiBaseUrl, serverKey]);
 
   const handleCopyUrl = async () => {
     if (qrUrl) {

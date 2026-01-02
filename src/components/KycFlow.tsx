@@ -49,6 +49,8 @@ export const KycFlow: React.FC<KycFlowProps> = ({
           onNavigate={handleNavigate}
           mobileBaseUrl={mobileBaseUrl}
           sessionId={sessionId}
+          apiBaseUrl={apiBaseUrl}
+          serverKey={serverKey}
         />
       ) : (
         <MobileRoute onClose={handleClose} onNavigate={handleNavigate} />
