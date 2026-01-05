@@ -4,6 +4,7 @@ import DocumentUploadModal from './DocumentUploadModal';
 import { useCamera } from '../features/faceScan/hooks/useCamera';
 import { useFaceScan } from '../features/faceScan/hooks/useFaceScan';
 import { useKycContext } from '../contexts/KycContext';
+import { Toast } from '../components/Toast';
 import '../index.css';
 
 interface FaceScanModalProps {
@@ -16,6 +17,7 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
   const navigate = useNavigate();
   const { apiService } = useKycContext();
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
   
   const { videoRef, cameraReady, stopCamera } = useCamera();
   const { state, setState, refs, handleFaceCapture } = useFaceScan(videoRef, faceCanvasRef, {
@@ -23,7 +25,29 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       if (!apiService) {
         throw new Error('API service not initialized');
       }
-      await apiService.uploadFaceScan(blob);
+      try {
+        await apiService.uploadFaceScan(blob);
+      } catch (error: any) {
+        // Check if it's a "Face already registered" error
+        const errorMessage = error?.message || '';
+        const errorData = (error as any)?.errorData || {};
+        
+        if (
+          errorMessage.includes('Face already registered') || 
+          errorMessage.includes('already registered') ||
+          errorData?.message?.includes('Face already registered') ||
+          (error as any)?.statusCode === 500 && errorMessage.includes('Face')
+        ) {
+          setToast({
+            message: 'Face has already been registered for this session. Proceeding to document upload.',
+            type: 'warning',
+          });
+          // Don't throw error - allow flow to continue to document upload
+          return;
+        }
+        // Re-throw other errors
+        throw error;
+      }
     },
     onFaceCaptureComplete: (imageData: string) => {
       if (onComplete) {
@@ -147,8 +171,17 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
   }
 
   return (
-    <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
-      <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl mt-48">
+    <>
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+          duration={6000}
+        />
+      )}
+      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+        <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl mt-48">
         <div className="relative mb-4">
           <h2 className="m-0 mb-4 text-[26px] font-bold text-white text-center">
             Capture Face
@@ -231,6 +264,7 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
         </div>
       </div>
     </div>
+    </>
   );
 }
 

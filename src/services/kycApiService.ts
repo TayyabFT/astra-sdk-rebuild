@@ -114,7 +114,11 @@ export class KycApiService {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         const message = errorData?.message || `Face upload failed with status ${response.status}`;
-        throw new Error(message);
+        // Preserve the original error message for better error handling
+        const error = new Error(message);
+        (error as any).statusCode = response.status;
+        (error as any).errorData = errorData;
+        throw error;
       }
 
       const data = await response.json();
