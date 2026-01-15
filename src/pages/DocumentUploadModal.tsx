@@ -13,6 +13,7 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
   const navigate = useNavigate();
   const { apiService } = useKycContext();
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [kycCompleted, setKycCompleted] = useState(false);
   
   const {
     state,
@@ -29,6 +30,16 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
         throw new Error('API service not initialized');
       }
       await apiService.uploadDocument(blob, docType);
+      // Check if KYC is completed after document upload
+      try {
+        const statusResponse = await apiService.getSessionStatus();
+        const { completed_steps, status } = statusResponse.data;
+        if (status === 'COMPLETED' || completed_steps.includes(COMPLETED_STEPS.COMPLETED)) {
+          setKycCompleted(true);
+        }
+      } catch (error) {
+        console.error('Error checking completion status:', error);
+      }
     },
     onUpload: (file, docType) => {
       if (onComplete) {
@@ -51,6 +62,12 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
         const statusResponse = await apiService.getSessionStatus();
         const { completed_steps, next_step, status } = statusResponse.data;
         
+        // Check if KYC is completed
+        if (status === 'COMPLETED' || completed_steps.includes(COMPLETED_STEPS.COMPLETED)) {
+          setKycCompleted(true);
+          return;
+        }
+        
         // Check if session is active
         if (status !== 'ACTIVE') {
           throw new Error('Session expired or inactive');
@@ -58,8 +75,11 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
         
         // If document_upload is already completed, show completion message
         if (completed_steps.includes(COMPLETED_STEPS.DOCS)) {
-          // Document already uploaded, could show completion or redirect
-          console.log('Document already uploaded');
+          // Check if all steps are completed
+          if (completed_steps.includes(COMPLETED_STEPS.FACE) && completed_steps.includes(COMPLETED_STEPS.DOCS)) {
+            setKycCompleted(true);
+            return;
+          }
         }
         
         // If next_step is not document_upload and face_scan is not completed, redirect to face scan
@@ -82,6 +102,28 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
     checkSession();
   }, [apiService, navigate]);
 
+
+  // Show KYC completion message
+  if (kycCompleted) {
+    return (
+      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+        <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl">
+          <div className="text-center">
+            <div className="mb-4 text-6xl">✅</div>
+            <h2 className="m-0 mb-4 text-[26px] font-bold text-green-500">
+              KYC Completed
+            </h2>
+            <p className="text-[#e5e7eb] mb-4 text-lg">
+              All steps have been completed successfully.
+            </p>
+            <p className="text-[#9ca3af] text-sm mb-6">
+              Please return to your desktop to continue.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Show session error if present
   if (sessionError) {

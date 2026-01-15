@@ -178,6 +178,40 @@ export class KycApiService {
   }
 
   /**
+   * Retry session - resets the session to allow face registration again
+   */
+  async retrySession(): Promise<any> {
+    const deviceType = this.config.deviceType || this.detectDeviceType();
+    
+    try {
+      const response = await fetch(
+        `${this.config.apiBaseUrl}/api/v2/dashboard/merchant/onsite/session/${this.config.sessionId}/retry`,
+        {
+          method: 'POST',
+          headers: {
+            'x-server-key': this.config.serverKey,
+            'device-type': deviceType,
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        const message = errorData?.message || `Retry failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (error: any) {
+      const message = error?.message || 'Retry failed';
+      throw new Error(`Retry failed: ${message}`);
+    }
+  }
+
+  /**
    * Check if session is active, throw error if not
    */
   async checkSessionActive(): Promise<void> {

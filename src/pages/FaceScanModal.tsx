@@ -19,6 +19,9 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
   const { apiService } = useKycContext();
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null);
+  const [showRetryButton, setShowRetryButton] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [kycCompleted, setKycCompleted] = useState(false);
   
   const { videoRef, cameraReady, stopCamera } = useCamera();
   const { state, setState, refs, handleFaceCapture } = useFaceScan(videoRef, faceCanvasRef, {
@@ -38,10 +41,12 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
           errorData?.message?.includes('Face already registered') ||
           (error as any)?.statusCode === 500 && errorMessage.includes('Face')
         ) {
+          setShowRetryButton(true);
           setToast({
-            message: 'Face already registered',
+            message: 'Face already registered. Click Retry to register again.',
             type: 'warning',
           });
+          setState(prev => ({ ...prev, loading: false }));
           return;
         }
         throw error;
@@ -65,6 +70,12 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
         // Check if session is active
         if (status !== 'ACTIVE') {
           throw new Error('Session expired or inactive');
+        }
+        
+        // Check if KYC is completed
+        if (status === 'COMPLETED' || completed_steps.includes(COMPLETED_STEPS.COMPLETED)) {
+          setKycCompleted(true);
+          return;
         }
         
         // If face_scan is already completed, skip to document upload
@@ -125,7 +136,55 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
     }
   }, [cameraReady, apiService]);
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
+    if (!apiService || isRetrying) return;
+    
+    setIsRetrying(true);
+    setShowRetryButton(false);
+    setToast(null);
+    
+    try {
+      await apiService.retrySession();
+      
+      // Reset face scan state
+      stopCamera();
+      setState({
+        cameraReady: false,
+        livenessStage: 'CENTER',
+        livenessReady: false,
+        livenessFailed: false,
+        modelLoading: true,
+        modelLoaded: false,
+        livenessInstruction: 'Look straight at the camera',
+        loading: false,
+        allStepsCompleted: false,
+        capturedImage: null,
+        showDocumentUpload: false,
+      });
+      
+      refs.centerHold.current = 0;
+      refs.leftHold.current = 0;
+      refs.rightHold.current = 0;
+      refs.snapTriggered.current = false;
+      refs.lastResultsAt.current = 0;
+      refs.modelLoaded.current = false;
+      refs.livenessFailed.current = false;
+      
+      // Reload to restart face scan
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    } catch (error: any) {
+      setIsRetrying(false);
+      setShowRetryButton(true);
+      setToast({
+        message: error?.message || 'Retry failed. Please try again.',
+        type: 'error',
+      });
+    }
+  };
+
+  const handleRestart = () => {
     stopCamera();
     setState({
       cameraReady: false,
@@ -153,6 +212,28 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       window.location.reload();
     }, 100);
   };
+
+  // Show KYC completion message
+  if (kycCompleted) {
+    return (
+      <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
+        <div className="max-w-[400px] w-full mx-auto bg-[#0b0f17] rounded-2xl p-6 shadow-xl">
+          <div className="text-center">
+            <div className="mb-4 text-6xl">✅</div>
+            <h2 className="m-0 mb-4 text-[26px] font-bold text-green-500">
+              KYC Completed
+            </h2>
+            <p className="text-[#e5e7eb] mb-4 text-lg">
+              All steps have been completed successfully.
+            </p>
+            <p className="text-[#9ca3af] text-sm mb-6">
+              Please return to your desktop to continue.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (state.showDocumentUpload) {
     return (
@@ -246,12 +327,23 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
             </div>
           )}
           
+          {showRetryButton && (
+            <button
+              type="button"
+              onClick={handleRetry}
+              disabled={isRetrying || state.loading}
+              className="py-3.5 px-4 rounded-xl text-base font-bold border-none transition-colors bg-[#f59e0b] text-[#0b0f17] cursor-pointer hover:bg-[#d97706] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isRetrying ? "Retrying..." : "Retry Face Registration"}
+            </button>
+          )}
+          
           <button
             type="button"
-            disabled={!state.cameraReady || state.loading || (!state.livenessFailed && state.livenessStage !== "DONE")}
+            disabled={!state.cameraReady || state.loading || (!state.livenessFailed && state.livenessStage !== "DONE") || showRetryButton}
             onClick={handleFaceCapture}
             className={`py-3.5 px-4 rounded-xl text-base font-bold border-none transition-colors ${
-              state.cameraReady && !state.loading && (state.livenessFailed || state.livenessStage === "DONE")
+              state.cameraReady && !state.loading && (state.livenessFailed || state.livenessStage === "DONE") && !showRetryButton
                 ? "bg-[#22c55e] text-[#0b0f17] cursor-pointer hover:bg-[#16a34a]"
                 : "bg-[#374151] text-[#e5e7eb] cursor-not-allowed"
             }`}
@@ -265,10 +357,10 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
           
           <button
             type="button"
-            onClick={handleRetry}
-            disabled={state.loading}
+            onClick={handleRestart}
+            disabled={state.loading || isRetrying}
             className={`py-3 px-4 rounded-[10px] text-[15px] font-semibold border-none w-full transition-colors ${
-              state.loading ? "bg-[#374151] text-[#e5e7eb] cursor-not-allowed opacity-50" : "bg-[#374151] text-[#e5e7eb] cursor-pointer hover:bg-[#4b5563]"
+              (state.loading || isRetrying) ? "bg-[#374151] text-[#e5e7eb] cursor-not-allowed opacity-50" : "bg-[#374151] text-[#e5e7eb] cursor-pointer hover:bg-[#4b5563]"
             }`}
           >
             Restart
