@@ -118,6 +118,7 @@ export function useFaceScan(
       if (callbacks?.onFaceUpload) {
         try {
           await callbacks.onFaceUpload(blob);
+          // Only proceed if upload was successful (not face already registered)
           setState(prev => ({
             ...prev,
             capturedImage: dataUrl,
@@ -125,8 +126,34 @@ export function useFaceScan(
             livenessInstruction: "Face captured and uploaded successfully!",
             loading: false,
           }));
+          
+          // Call completion callback
+          if (callbacks?.onFaceCaptureComplete) {
+            callbacks.onFaceCaptureComplete(dataUrl);
+          }
+          
+          setTimeout(() => {
+            setState(prev => ({ ...prev, showDocumentUpload: true }));
+          }, 500);
         } catch (uploadError: any) {
-          throw new Error(uploadError.message || 'Failed to upload face scan');
+          // If it's the face already registered error, don't show document upload
+          if (uploadError.message === 'FACE_ALREADY_REGISTERED' || (uploadError as any).isFaceAlreadyRegistered) {
+            setState(prev => ({
+              ...prev,
+              loading: false,
+              allStepsCompleted: false,
+              showDocumentUpload: false,
+              livenessInstruction: "Face already registered. Please click Retry to register again.",
+            }));
+            return; // Don't proceed to document upload
+          }
+          // For other errors, show error message
+          setState(prev => ({
+            ...prev,
+            livenessInstruction: uploadError.message || 'Error capturing image. Please try again.',
+            loading: false,
+          }));
+          throw uploadError;
         }
       } else {
         setState(prev => ({
@@ -136,16 +163,16 @@ export function useFaceScan(
           livenessInstruction: "Face captured successfully!",
           loading: false,
         }));
+        
+        // Call completion callback
+        if (callbacks?.onFaceCaptureComplete) {
+          callbacks.onFaceCaptureComplete(dataUrl);
+        }
+        
+        setTimeout(() => {
+          setState(prev => ({ ...prev, showDocumentUpload: true }));
+        }, 500);
       }
-      
-      // Call completion callback
-      if (callbacks?.onFaceCaptureComplete) {
-        callbacks.onFaceCaptureComplete(dataUrl);
-      }
-      
-      setTimeout(() => {
-        setState(prev => ({ ...prev, showDocumentUpload: true }));
-      }, 500);
     } catch (err: any) {
       console.error('Error capturing image:', err);
       setState(prev => ({

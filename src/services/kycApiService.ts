@@ -120,17 +120,25 @@ export class KycApiService {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        const message = errorData?.message || `Face upload failed with status ${response.status}`;
+        const message = errorData?.message || errorData?.errorData?.message || `Face upload failed with status ${response.status}`;
         // Preserve the original error message for better error handling
         const error = new Error(message);
         (error as any).statusCode = response.status;
         (error as any).errorData = errorData;
+        // Also preserve the full error response structure
+        if (errorData.statusCode) {
+          (error as any).statusCode = errorData.statusCode;
+        }
         throw error;
       }
 
       const data = await response.json();
       return data;
     } catch (error: any) {
+      // If error already has a message from the response, preserve it
+      if (error.message && !error.message.includes('Face upload failed')) {
+        throw error;
+      }
       const message = error?.message || 'Face upload failed';
       throw new Error(`Face upload failed: ${message}`);
     }

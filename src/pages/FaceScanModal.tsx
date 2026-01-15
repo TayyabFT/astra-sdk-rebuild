@@ -34,20 +34,27 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       } catch (error: any) {
         const errorMessage = error?.message || '';
         const errorData = (error as any)?.errorData || {};
+        const statusCode = (error as any)?.statusCode;
         
-        if (
+        // Check for "Face already registered" error in various formats
+        // The API returns: { success: false, statusCode: 500, message: "Face already registered", errorData: {...} }
+        const isFaceAlreadyRegistered = 
           errorMessage.includes('Face already registered') || 
           errorMessage.includes('already registered') ||
           errorData?.message?.includes('Face already registered') ||
-          (error as any)?.statusCode === 500 && errorMessage.includes('Face')
-        ) {
+          (statusCode === 500 && errorMessage.includes('Face already registered'));
+        
+        if (isFaceAlreadyRegistered) {
           setShowRetryButton(true);
           setToast({
             message: 'Face already registered. Click Retry to register again.',
             type: 'warning',
           });
-          setState(prev => ({ ...prev, loading: false }));
-          return;
+          setState(prev => ({ ...prev, loading: false, allStepsCompleted: false, showDocumentUpload: false }));
+          // Throw a special error to prevent continuing to document upload
+          const faceRegisteredError = new Error('FACE_ALREADY_REGISTERED');
+          (faceRegisteredError as any).isFaceAlreadyRegistered = true;
+          throw faceRegisteredError;
         }
         throw error;
       }
