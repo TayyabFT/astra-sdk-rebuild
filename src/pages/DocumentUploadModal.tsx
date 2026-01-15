@@ -33,8 +33,8 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
       // Check if KYC is completed after document upload
       try {
         const statusResponse = await apiService.getSessionStatus();
-        const { completed_steps, status } = statusResponse.data;
-        if (status === 'COMPLETED' || completed_steps.includes(COMPLETED_STEPS.COMPLETED)) {
+        const { completed_steps, next_step } = statusResponse.data;
+        if (next_step === 'completed' || completed_steps.includes(COMPLETED_STEPS.COMPLETED)) {
           setKycCompleted(true);
         }
       } catch (error) {
@@ -103,7 +103,6 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
   }, [apiService, navigate]);
 
 
-  // Show KYC completion message
   if (kycCompleted) {
     return (
       <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
