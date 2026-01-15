@@ -49,6 +49,9 @@ export function useFaceScan(
     lastResultsAt: 0,
     stage: 'CENTER' as LivenessStage,
     livenessReady: false,
+    currentYaw: null as number | null,
+    currentAbsYaw: null as number | null,
+    livenessCompleted: false,
   });
 
   // Sync refs with state
@@ -74,6 +77,27 @@ export function useFaceScan(
 
   const handleFaceCapture = useCallback(async () => {
     if (!videoRef.current) return;
+    
+    // Check if face is straight before capturing
+    const centerThreshold = 0.05;
+    const currentAbsYaw = livenessStateRef.current.currentAbsYaw;
+    
+    if (currentAbsYaw === null || currentAbsYaw === undefined) {
+      setState(prev => ({
+        ...prev,
+        livenessInstruction: "Please position your face in front of the camera",
+      }));
+      return;
+    }
+    
+    if (currentAbsYaw >= centerThreshold) {
+      setState(prev => ({
+        ...prev,
+        livenessInstruction: "Please look straight at the camera before capturing",
+      }));
+      return;
+    }
+    
     setState(prev => ({ ...prev, loading: true }));
     try {
       const video = videoRef.current;

@@ -19,6 +19,9 @@ export interface LivenessState {
   lastResultsAt: number;
   stage: LivenessStage;
   livenessReady: boolean;
+  currentYaw: number | null;
+  currentAbsYaw: number | null;
+  livenessCompleted: boolean;
 }
 
 export class FaceMeshService {
@@ -111,6 +114,10 @@ export class FaceMeshService {
 
       this.processLiveness(faceOnCanvas, w, h);
     } else {
+      // Reset face orientation when no face is detected
+      this.livenessStateRef.current.currentYaw = null;
+      this.livenessStateRef.current.currentAbsYaw = null;
+      
       const vid = this.videoRef.current as HTMLVideoElement | null;
       if (vid) {
         const vidW = Math.max(1, vid?.videoWidth || displayW);
@@ -160,6 +167,10 @@ export class FaceMeshService {
       const yaw = (nT.x - midX) / Math.max(1e-6, faceWidth);
       const absYaw = Math.abs(yaw);
       
+      // Store current face orientation for capture validation
+      this.livenessStateRef.current.currentYaw = yaw;
+      this.livenessStateRef.current.currentAbsYaw = absYaw;
+      
       const xs = faceOnCanvas.map(p => p.x), ys = faceOnCanvas.map(p => p.y);
       const minX = Math.min(...xs) * w, maxX = Math.max(...xs) * w;
       const minY = Math.min(...ys) * h, maxY = Math.max(...ys) * h;
@@ -192,11 +203,14 @@ export class FaceMeshService {
         } else if (absYaw < centerThreshold) {
           state.centerHold += 1;
           if (state.centerHold >= holdFramesCenter) {
-            const newStage: LivenessStage = "LEFT";
-            state.stage = newStage;
-            state.centerHold = 0;
-            if (this.callbacks.onLivenessUpdate) {
-              this.callbacks.onLivenessUpdate(newStage, "Turn your face LEFT");
+            // Only transition to LEFT if liveness check hasn't been completed yet
+            if (!state.livenessCompleted) {
+              const newStage: LivenessStage = "LEFT";
+              state.stage = newStage;
+              state.centerHold = 0;
+              if (this.callbacks.onLivenessUpdate) {
+                this.callbacks.onLivenessUpdate(newStage, "Turn your face LEFT");
+              }
             }
           }
         } else {
@@ -235,22 +249,42 @@ export class FaceMeshService {
           state.rightHold += 1;
           if (state.rightHold >= holdFramesTurn) {
             state.rightHold = 0;
-            if (!state.snapTriggered) {
-              state.snapTriggered = true;
-              const newStage: LivenessStage = "DONE";
-              state.stage = newStage;
-              if (this.callbacks.onLivenessUpdate) {
-                this.callbacks.onLivenessUpdate(newStage, "Capturing...");
-              }
-              if (this.callbacks.onCaptureTrigger) {
-                this.callbacks.onCaptureTrigger();
-              }
+            // Mark liveness as completed and transition to DONE stage
+            state.livenessCompleted = true;
+            const newStage: LivenessStage = "DONE";
+            state.stage = newStage;
+            state.centerHold = 0;
+            if (this.callbacks.onLivenessUpdate) {
+              this.callbacks.onLivenessUpdate(newStage, "Great! Now look straight at the camera");
             }
           }
         } else {
           state.rightHold = 0;
           if (this.callbacks.onLivenessUpdate) {
             this.callbacks.onLivenessUpdate(state.stage, yaw < -leftThreshold ? "You're facing left. Turn RIGHT" : "Turn a bit more RIGHT");
+          }
+        }
+      } else if (state.stage === "DONE") {
+        // In DONE stage, wait for face to be straight before capturing
+        if (absYaw < centerThreshold && insideGuide) {
+          state.centerHold += 1;
+          if (state.centerHold >= holdFramesCenter && !state.snapTriggered) {
+            state.snapTriggered = true;
+            if (this.callbacks.onLivenessUpdate) {
+              this.callbacks.onLivenessUpdate(state.stage, "Capturing...");
+            }
+            if (this.callbacks.onCaptureTrigger) {
+              this.callbacks.onCaptureTrigger();
+            }
+          }
+        } else {
+          state.centerHold = 0;
+          if (this.callbacks.onLivenessUpdate) {
+            if (!insideGuide) {
+              this.callbacks.onLivenessUpdate(state.stage, "Center your face inside the circle");
+            } else {
+              this.callbacks.onLivenessUpdate(state.stage, "Please look straight at the camera");
+            }
           }
         }
       }

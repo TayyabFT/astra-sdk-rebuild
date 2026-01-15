@@ -28,7 +28,6 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       try {
         await apiService.uploadFaceScan(blob);
       } catch (error: any) {
-        // Check if it's a "Face already registered" error
         const errorMessage = error?.message || '';
         const errorData = (error as any)?.errorData || {};
         
@@ -39,13 +38,11 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
           (error as any)?.statusCode === 500 && errorMessage.includes('Face')
         ) {
           setToast({
-            message: 'Face has already been registered for this session. Proceeding to document upload.',
+            message: 'Face already registered',
             type: 'warning',
           });
-          // Don't throw error - allow flow to continue to document upload
           return;
         }
-        // Re-throw other errors
         throw error;
       }
     },
@@ -56,7 +53,6 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
     },
   });
   
-  // Check session status on mount
   useEffect(() => {
     const checkSession = async () => {
       if (!apiService) return;
@@ -67,7 +63,6 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       } catch (error: any) {
         const message = error.message || 'Session expired or inactive';
         setSessionError(message);
-        // Redirect to QR page after showing error
         setTimeout(() => {
           navigate('/qr', { replace: true });
         }, 2000);
@@ -77,15 +72,12 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
     checkSession();
   }, [apiService, navigate]);
 
-  // Sync camera ready state
   useEffect(() => {
     setState(prev => ({ ...prev, cameraReady }));
   }, [cameraReady, setState]);
 
-  // Log session info and call status API when camera opens
   useEffect(() => {
     if (cameraReady && apiService) {
-      // Get config from apiService to log session info
       const config = apiService.getConfig();
       if (config) {
         console.log('=== Camera Opened ===');
@@ -94,7 +86,6 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
         console.log('API Base URL:', config.apiBaseUrl);
         console.log('Device Type:', config.deviceType || 'auto-detected');
         
-        // Call status API
         apiService.getSessionStatus()
           .then((statusResponse) => {
             console.log('=== Session Status API Response ===');
@@ -152,8 +143,7 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       />
     );
   }
-
-  // Show session error if present
+  
   if (sessionError) {
     return (
       <div className="fixed inset-0 bg-black p-5 z-[1000] flex items-center justify-center font-sans overflow-y-auto custom__scrollbar">
