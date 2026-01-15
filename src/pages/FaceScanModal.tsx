@@ -5,6 +5,7 @@ import { useCamera } from '../features/faceScan/hooks/useCamera';
 import { useFaceScan } from '../features/faceScan/hooks/useFaceScan';
 import { useKycContext } from '../contexts/KycContext';
 import { Toast } from '../components/Toast';
+import { COMPLETED_STEPS } from '../services/kycApiService';
 import '../index.css';
 
 interface FaceScanModalProps {
@@ -58,7 +59,28 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
       if (!apiService) return;
       
       try {
-        await apiService.checkSessionActive();
+        const statusResponse = await apiService.getSessionStatus();
+        const { completed_steps, next_step, status } = statusResponse.data;
+        
+        // Check if session is active
+        if (status !== 'ACTIVE') {
+          throw new Error('Session expired or inactive');
+        }
+        
+        // If face_scan is already completed, skip to document upload
+        if (completed_steps.includes(COMPLETED_STEPS.FACE)) {
+          setState(prev => ({ ...prev, showDocumentUpload: true }));
+          return;
+        }
+        
+        // If next_step is not face_scan, redirect accordingly
+        if (next_step !== COMPLETED_STEPS.FACE && next_step !== COMPLETED_STEPS.INITIATED) {
+          if (next_step === COMPLETED_STEPS.DOCS) {
+            setState(prev => ({ ...prev, showDocumentUpload: true }));
+            return;
+          }
+        }
+        
         setSessionError(null);
       } catch (error: any) {
         const message = error.message || 'Session expired or inactive';
@@ -70,7 +92,7 @@ function FaceScanModal({ onComplete }: FaceScanModalProps) {
     };
     
     checkSession();
-  }, [apiService, navigate]);
+  }, [apiService, navigate, setState]);
 
   useEffect(() => {
     setState(prev => ({ ...prev, cameraReady }));

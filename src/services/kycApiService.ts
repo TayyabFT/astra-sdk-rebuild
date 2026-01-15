@@ -3,6 +3,13 @@
  * Handles all KYC-related API calls (face scan, document upload, status check)
  */
 
+export const COMPLETED_STEPS = {
+  INITIATED: "initiated",
+  FACE: "face_scan",
+  DOCS: "document_upload",
+  COMPLETED: "completed",
+} as const;
+
 export interface KycApiConfig {
   apiBaseUrl: string;
   sessionId: string;

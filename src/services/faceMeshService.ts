@@ -265,8 +265,10 @@ export class FaceMeshService {
           }
         }
       } else if (state.stage === "DONE") {
-        // In DONE stage, wait for face to be straight before capturing
-        if (absYaw < centerThreshold && insideGuide) {
+        // In DONE stage, wait for face to be straight before capturing (no center check needed)
+        // Reduced threshold for easier capture when face is straight
+        const reducedThreshold = 0.08; // More lenient threshold
+        if (absYaw < reducedThreshold) {
           state.centerHold += 1;
           if (state.centerHold >= holdFramesCenter && !state.snapTriggered) {
             state.snapTriggered = true;
@@ -280,11 +282,7 @@ export class FaceMeshService {
         } else {
           state.centerHold = 0;
           if (this.callbacks.onLivenessUpdate) {
-            if (!insideGuide) {
-              this.callbacks.onLivenessUpdate(state.stage, "Center your face inside the circle");
-            } else {
-              this.callbacks.onLivenessUpdate(state.stage, "Please look straight at the camera");
-            }
+            this.callbacks.onLivenessUpdate(state.stage, "Please look straight at the camera");
           }
         }
       }

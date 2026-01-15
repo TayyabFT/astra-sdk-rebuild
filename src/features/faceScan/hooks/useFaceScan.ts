@@ -78,8 +78,8 @@ export function useFaceScan(
   const handleFaceCapture = useCallback(async () => {
     if (!videoRef.current) return;
     
-    // Check if face is straight before capturing
-    const centerThreshold = 0.05;
+    // Check if face is straight before capturing (reduced threshold, no center check)
+    const reducedThreshold = 0.08; // More lenient threshold - only check if face is straight
     const currentAbsYaw = livenessStateRef.current.currentAbsYaw;
     
     if (currentAbsYaw === null || currentAbsYaw === undefined) {
@@ -90,7 +90,7 @@ export function useFaceScan(
       return;
     }
     
-    if (currentAbsYaw >= centerThreshold) {
+    if (currentAbsYaw >= reducedThreshold) {
       setState(prev => ({
         ...prev,
         livenessInstruction: "Please look straight at the camera before capturing",

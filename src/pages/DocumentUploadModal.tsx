@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDocumentUpload } from '../features/documentUpload/hooks/useDocumentUpload';
 import { useKycContext } from '../contexts/KycContext';
+import { COMPLETED_STEPS } from '../services/kycApiService';
 import type { DocumentType } from '../features/documentUpload/types';
 
 interface DocumentUploadModalProps {
@@ -47,7 +48,26 @@ function DocumentUploadModal({ onComplete }: DocumentUploadModalProps) {
       if (!apiService) return;
       
       try {
-        await apiService.checkSessionActive();
+        const statusResponse = await apiService.getSessionStatus();
+        const { completed_steps, next_step, status } = statusResponse.data;
+        
+        // Check if session is active
+        if (status !== 'ACTIVE') {
+          throw new Error('Session expired or inactive');
+        }
+        
+        // If document_upload is already completed, show completion message
+        if (completed_steps.includes(COMPLETED_STEPS.DOCS)) {
+          // Document already uploaded, could show completion or redirect
+          console.log('Document already uploaded');
+        }
+        
+        // If next_step is not document_upload and face_scan is not completed, redirect to face scan
+        if (next_step === COMPLETED_STEPS.FACE && !completed_steps.includes(COMPLETED_STEPS.FACE)) {
+          // Should not happen if we're in document upload modal, but handle it
+          console.warn('Face scan not completed, but in document upload modal');
+        }
+        
         setSessionError(null);
       } catch (error: any) {
         const message = error.message || 'Session expired or inactive';
